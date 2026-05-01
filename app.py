@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 
@@ -8,8 +9,12 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
 from trail_buddy.graph import build_graph
+from trail_buddy.logging_config import configure_logging
 
 load_dotenv()
+configure_logging()
+
+logger = logging.getLogger(__name__)
 
 graph = build_graph()
 
@@ -19,11 +24,15 @@ def chat_fn(message: str, history: list, session_id: str):
     inputs = {"messages": [HumanMessage(content=message)]}
 
     accumulated = ""
-    for chunk, _meta in graph.stream(inputs, config, stream_mode="messages"):
-        token = getattr(chunk, "content", "") or ""
-        if token:
-            accumulated += token
-            yield accumulated
+    try:
+        for chunk, _meta in graph.stream(inputs, config, stream_mode="messages"):
+            token = getattr(chunk, "content", "") or ""
+            if token:
+                accumulated += token
+                yield accumulated
+    except Exception:
+        logger.exception("Chat response streaming failed")
+        raise
 
 
 def new_session() -> str:

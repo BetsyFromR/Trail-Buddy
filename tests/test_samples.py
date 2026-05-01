@@ -77,20 +77,21 @@ def test_graph_populates_retrieved_context_from_retriever():
     assert result["messages"][-1].content == "Use poles on steep climbs."
 
 
-def test_graph_continues_when_retriever_fails(capsys):
+def test_graph_continues_when_retriever_fails(caplog):
     def failing_retriever(_query):
         raise RuntimeError("embedding model unavailable")
 
     llm = FakeListChatModel(responses=["Answer without retrieved context."])
     graph = build_graph(llm=llm, retriever=failing_retriever)
 
-    result = _invoke(graph, "How to choose trail poles?", thread="rag-error")
+    with caplog.at_level("INFO", logger="trail_buddy.nodes"):
+        result = _invoke(graph, "How to choose trail poles?", thread="rag-error")
 
-    output = capsys.readouterr().out
     assert result["retrieved"] == []
     assert result["messages"][-1].content == "Answer without retrieved context."
-    assert "[RAG] retrieval_error: RuntimeError: embedding model unavailable" in output
-    assert "[RAG] retrieved_docs: 0" in output
+    assert "[RAG] retrieval_error" in caplog.text
+    assert "RuntimeError: embedding model unavailable" in caplog.text
+    assert "[RAG] retrieved_docs: 0" in caplog.text
 
 
 def test_retrieval_settings_resolve_external_store(monkeypatch, tmp_path):

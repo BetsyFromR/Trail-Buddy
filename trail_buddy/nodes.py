@@ -1,3 +1,5 @@
+import logging
+
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage
 
@@ -7,6 +9,7 @@ from trail_buddy.state import State
 
 
 TEXT_PREVIEW_CHARS = 180
+logger = logging.getLogger(__name__)
 
 
 def _message_text(content) -> str:
@@ -53,36 +56,36 @@ def _doc_summary(context: str) -> str:
     return f"chunk_id={chunk_id} | {title} | {source} | text={preview}"
 
 
-def _print_retrieval_trace(query: str, retrieved: list[str]) -> None:
-    print(f"[RAG] query: {query}", flush=True)
-    print(f"[RAG] retrieved_docs: {len(retrieved)}", flush=True)
+def _log_retrieval_trace(query: str, retrieved: list[str]) -> None:
+    logger.info("[RAG] query: %s", query)
+    logger.info("[RAG] retrieved_docs: %s", len(retrieved))
     for index, context in enumerate(retrieved, start=1):
-        print(f"[RAG] doc {index}: {_doc_summary(context)}", flush=True)
+        logger.info("[RAG] doc %s: %s", index, _doc_summary(context))
 
 
-def _print_answer_trace(response) -> None:
+def _log_answer_trace(response) -> None:
     answer = _message_text(getattr(response, "content", response)).strip()
-    print(f"[RAG] answer: {answer}", flush=True)
+    logger.info("[RAG] answer: %s", answer)
 
 
 def make_retrieve_node(retriever=retrieve_context):
     def _retrieve_node(state: State) -> dict:
         query = _latest_user_text(state)
         if not query.strip():
-            _print_retrieval_trace(query, [])
+            _log_retrieval_trace(query, [])
             return {"retrieved": []}
 
         try:
             retrieved = retriever(query)
-            _print_retrieval_trace(query, retrieved)
+            _log_retrieval_trace(query, retrieved)
             return {"retrieved": retrieved}
         except RetrievalUnavailable as exc:
-            print(f"[RAG] retrieval_unavailable: {exc}", flush=True)
-            _print_retrieval_trace(query, [])
+            logger.warning("[RAG] retrieval_unavailable: %s", exc)
+            _log_retrieval_trace(query, [])
             return {"retrieved": []}
-        except Exception as exc:
-            print(f"[RAG] retrieval_error: {type(exc).__name__}: {exc}", flush=True)
-            _print_retrieval_trace(query, [])
+        except Exception:
+            logger.exception("[RAG] retrieval_error")
+            _log_retrieval_trace(query, [])
             return {"retrieved": []}
 
     return _retrieve_node
@@ -109,7 +112,7 @@ def make_advisor_node(llm: BaseChatModel):
             )
         )
         response = llm.invoke([system, *_non_system_messages(state["messages"])])
-        _print_answer_trace(response)
+        _log_answer_trace(response)
         return {"messages": [response]}
 
     return advisor_node
