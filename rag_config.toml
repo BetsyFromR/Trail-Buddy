@@ -1,0 +1,9 @@
+[rag]
+# Relative paths resolve from the project root.
+store_dir = "rag_store"
+
+# Leave empty to search all collections found in indexes/chroma/chroma.sqlite3.
+collection = ""
+
+embedding_model = "all-MiniLM-L6-v2"
+retriever_k = 5
