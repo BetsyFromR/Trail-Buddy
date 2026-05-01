@@ -128,7 +128,8 @@ def test_collection_names_can_be_read_from_rag_store(monkeypatch):
     if not names:
         pytest.skip(f"No Chroma collections found in configured RAG store: {settings.rag_store_dir}")
 
-    assert settings.collection_name in names
+    assert settings.collection_name is None
+    assert names
 
 
 def test_raw_document_paths_can_be_read_from_rag_store():

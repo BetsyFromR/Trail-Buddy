@@ -6,7 +6,11 @@ from typing import Any
 
 from langchain_core.documents import Document
 
-from trail_buddy.retrieval.config import RetrievalSettings, get_retrieval_settings
+from trail_buddy.retrieval.config import (
+    RetrievalSettings,
+    available_collection_names,
+    get_retrieval_settings,
+)
 
 
 class RetrievalUnavailable(RuntimeError):
@@ -27,12 +31,11 @@ def _load_embedding_model(model_name: str) -> Any:
     )
 
 
-@lru_cache(maxsize=4)
-def _cached_retriever(
+@lru_cache(maxsize=16)
+def _cached_vectorstore(
     chroma_dir: str,
     collection_name: str,
     embedding_model: str,
-    retriever_k: int,
 ) -> Any:
     try:
         from langchain_chroma import Chroma
@@ -49,18 +52,21 @@ def _cached_retriever(
         embedding_function=embeddings,
         persist_directory=str(persist_directory),
     )
-    return vectorstore.as_retriever(search_kwargs={"k": retriever_k})
+    return vectorstore
 
 
 def _format_doc(doc: Document, index: int) -> str:
     title = doc.metadata.get("title") or "Untitled"
     source = doc.metadata.get("url") or doc.metadata.get("source") or "unknown"
+    collection = doc.metadata.get("collection")
     chunk_id = getattr(doc, "id", None) or doc.metadata.get("id") or doc.metadata.get("chunk_id")
     text = " ".join(doc.page_content.split())
     parts = [
         f"[{index}] Title: {title}",
         f"Source: {source}",
     ]
+    if collection:
+        parts.append(f"Collection: {collection}")
     if chunk_id:
         parts.append(f"Chunk ID: {chunk_id}")
     parts.append(text)
@@ -76,16 +82,30 @@ def retrieve_documents(
     settings: RetrievalSettings | None = None,
 ) -> list[Document]:
     resolved = settings or get_retrieval_settings()
-    if not resolved.collection_name:
-        raise RetrievalUnavailable("No Chroma collection found in the configured RAG store.")
-
-    retriever = _cached_retriever(
-        str(resolved.chroma_dir),
-        resolved.collection_name,
-        resolved.embedding_model,
-        resolved.retriever_k,
+    collection_names = (
+        [resolved.collection_name]
+        if resolved.collection_name
+        else available_collection_names(resolved.rag_store_dir)
     )
-    return list(retriever.invoke(query))
+    if not collection_names:
+        raise RetrievalUnavailable("No Chroma collections found in the configured RAG store.")
+
+    scored_docs: list[tuple[Document, float]] = []
+    for collection_name in collection_names:
+        vectorstore = _cached_vectorstore(
+            str(resolved.chroma_dir),
+            collection_name,
+            resolved.embedding_model,
+        )
+        for doc, score in vectorstore.similarity_search_with_score(
+            query,
+            k=resolved.retriever_k,
+        ):
+            doc.metadata.setdefault("collection", collection_name)
+            scored_docs.append((doc, score))
+
+    scored_docs.sort(key=lambda item: item[1])
+    return [doc for doc, _score in scored_docs[:resolved.retriever_k]]
 
 
 def retrieve_context(

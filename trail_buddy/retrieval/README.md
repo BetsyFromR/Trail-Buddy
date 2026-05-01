@@ -23,16 +23,26 @@ TRAIL_BUDDY_RAG_STORE_DIR/
 
 Configure it with:
 
-```bash
-TRAIL_BUDDY_RAG_STORE_DIR=rag_store
-TRAIL_BUDDY_RAG_EMBEDDING_MODEL=all-MiniLM-L6-v2
-TRAIL_BUDDY_RAG_RETRIEVER_K=5
+```toml
+# rag_config.toml
+[rag]
+store_dir = "rag_store"
+collection = ""
+embedding_model = "all-MiniLM-L6-v2"
+retriever_k = 5
 ```
 
-`TRAIL_BUDDY_RAG_STORE_DIR` defaults to `./rag_store` inside the project root.
-The app uses collection names discovered in `rag_store/indexes/chroma/chroma.sqlite3`.
-All raw `*.jsonl` files under `rag_store/data/raw/` are discovered by path; the
-app does not require a specific filename.
+`store_dir` defaults to `./rag_store` inside the project root. Empty
+`collection` means the app searches all collections discovered in
+`rag_store/indexes/chroma/chroma.sqlite3`, merges their matches, and keeps the
+best `retriever_k` results overall. Set `collection` only if you want to force a
+single collection. All raw `*.jsonl` files under `rag_store/data/raw/` are
+discovered by path; the app does not require a specific filename.
+
+Env vars still override the file: `TRAIL_BUDDY_RAG_STORE_DIR`,
+`TRAIL_BUDDY_RAG_COLLECTION`, `TRAIL_BUDDY_RAG_EMBEDDING_MODEL`, and
+`TRAIL_BUDDY_RAG_RETRIEVER_K`. Set `TRAIL_BUDDY_RAG_CONFIG_FILE` to use a
+different config file.
 
 ## Check RAG
 
