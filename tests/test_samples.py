@@ -1,8 +1,15 @@
+import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import HumanMessage
 
 from trail_buddy.graph import build_graph
 from trail_buddy.prompts import render_system_prompt
+from trail_buddy.retrieval.config import (
+    PROJECT_ROOT,
+    available_collection_names,
+    available_raw_document_paths,
+    get_retrieval_settings,
+)
 
 
 def _invoke(graph, text: str, thread: str):
@@ -14,7 +21,7 @@ def _invoke(graph, text: str, thread: str):
 
 def test_graph_builds_and_responds_with_fake_llm():
     llm = FakeListChatModel(responses=["Sure — what's the race name and your half marathon PR?"])
-    graph = build_graph(llm=llm)
+    graph = build_graph(llm=llm, retriever=lambda query: [])
 
     result = _invoke(
         graph,
@@ -28,7 +35,7 @@ def test_graph_builds_and_responds_with_fake_llm():
 
 def test_multi_turn_uses_checkpointer():
     llm = FakeListChatModel(responses=["Which race?", "Roughly 6:00–7:00 hours."])
-    graph = build_graph(llm=llm)
+    graph = build_graph(llm=llm, retriever=lambda query: [])
 
     first = _invoke(graph, "Can I run 35 km / 2000 D+?", thread="multi")
     assert len(first["messages"]) == 2  # human + ai
@@ -51,7 +58,83 @@ def test_system_prompt_includes_profile_and_retrieved():
 
 def test_state_has_messages_after_invocation():
     llm = FakeListChatModel(responses=["Wash them."])
-    graph = build_graph(llm=llm)
+    graph = build_graph(llm=llm, retriever=lambda query: [])
     result = _invoke(graph, "А кроссовки надо стирать?", thread="ru")
     assert result["messages"][-1].content == "Wash them."
     assert result["retrieved"] == []
+
+
+def test_graph_populates_retrieved_context_from_retriever():
+    llm = FakeListChatModel(responses=["Use poles on steep climbs."])
+    graph = build_graph(
+        llm=llm,
+        retriever=lambda query: [f"Retrieved context for: {query}"],
+    )
+
+    result = _invoke(graph, "How to choose trail poles?", thread="rag")
+
+    assert result["retrieved"] == ["Retrieved context for: How to choose trail poles?"]
+    assert result["messages"][-1].content == "Use poles on steep climbs."
+
+
+def test_graph_continues_when_retriever_fails(caplog):
+    def failing_retriever(_query):
+        raise RuntimeError("embedding model unavailable")
+
+    llm = FakeListChatModel(responses=["Answer without retrieved context."])
+    graph = build_graph(llm=llm, retriever=failing_retriever)
+
+    with caplog.at_level("INFO", logger="trail_buddy.nodes"):
+        result = _invoke(graph, "How to choose trail poles?", thread="rag-error")
+
+    assert result["retrieved"] == []
+    assert result["messages"][-1].content == "Answer without retrieved context."
+    assert "[RAG] retrieval_error" in caplog.text
+    assert "RuntimeError: embedding model unavailable" in caplog.text
+    assert "[RAG] retrieved_docs: 0" in caplog.text
+
+
+def test_retrieval_settings_resolve_external_store(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_STORE_DIR", str(tmp_path))
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_COLLECTION", "test_collection")
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_EMBEDDING_MODEL", "test-embedding")
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_RETRIEVER_K", "7")
+
+    settings = get_retrieval_settings()
+
+    assert settings.rag_store_dir == tmp_path
+    assert settings.raw_data_dir == tmp_path / "data" / "raw"
+    assert settings.processed_data_dir == tmp_path / "data" / "processed"
+    assert settings.chroma_dir == tmp_path / "indexes" / "chroma"
+    assert settings.document_paths == []
+    assert settings.collection_name == "test_collection"
+    assert settings.embedding_model == "test-embedding"
+    assert settings.retriever_k == 7
+
+
+def test_relative_rag_store_path_resolves_from_project_root(monkeypatch):
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_STORE_DIR", "rag_store_for_tests")
+
+    settings = get_retrieval_settings()
+
+    assert settings.rag_store_dir == PROJECT_ROOT / "rag_store_for_tests"
+
+
+def test_collection_names_can_be_read_from_rag_store(monkeypatch):
+    monkeypatch.delenv("TRAIL_BUDDY_RAG_COLLECTION", raising=False)
+
+    settings = get_retrieval_settings()
+    names = available_collection_names(settings.rag_store_dir)
+    if not names:
+        pytest.skip(f"No Chroma collections found in configured RAG store: {settings.rag_store_dir}")
+
+    assert settings.collection_name in names
+
+
+def test_raw_document_paths_can_be_read_from_rag_store():
+    settings = get_retrieval_settings()
+    paths = available_raw_document_paths(settings.rag_store_dir)
+    if not paths:
+        pytest.skip(f"No raw JSONL documents found in configured RAG store: {settings.rag_store_dir}")
+
+    assert settings.document_paths == paths

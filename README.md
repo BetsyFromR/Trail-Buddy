@@ -16,6 +16,14 @@ cp .env.example .env
 
 `TRAIL_BUDDY_MODEL` is a LiteLLM model id — `anthropic/claude-sonnet-4-5`, `openai/gpt-4.1`, `ollama/qwen2.5:32b`, etc. Switching providers needs no code change.
 
+RAG data is kept outside the chat app. Set `TRAIL_BUDDY_RAG_STORE_DIR` to the
+store root that contains `data/raw/`, `data/processed/`, and `indexes/chroma/`.
+The default is `rag_store` inside this project.
+
+Logs are written to `logs/trail_buddy.log` and `logs/trail_buddy.error.log`.
+Override the location or verbosity with `TRAIL_BUDDY_LOG_DIR` and
+`TRAIL_BUDDY_LOG_LEVEL`.
+
 ## Run
 
 ```bash
@@ -30,18 +38,23 @@ trail_buddy/
   state.py        State schema (messages, profile, retrieved)
   prompts.py      System prompt — clarification policy, language rule, health caveats
   llm.py          ChatLiteLLM factory (provider chosen via env)
-  nodes.py        retrieve_node (RAG stub) + advisor_node
+  nodes.py        retrieve_node (local RAG lookup) + advisor_node
   graph.py        build_graph() — START → retrieve → advisor → END, with MemorySaver
-  retrieval/      placeholder package for future RAG
+  retrieval/      RAG path/config seam for external docs and indexes
 app.py            Gradio ChatInterface
 tests/            pytest smoke tests
 ```
 
-## Roadmap — RAG
+## RAG
 
-`trail_buddy/retrieval/` is the seam. Working assumptions:
+`trail_buddy/retrieval/` reads a user-provided Chroma store from
+`TRAIL_BUDDY_RAG_STORE_DIR`. If retrieval is unavailable, the graph logs the
+failure and answers without retrieved context.
 
-- Embeddings: `BAAI/bge-m3` (multilingual, local).
+Current assumptions:
+
+- Embeddings: `all-MiniLM-L6-v2` for the existing copied index; rebuild a new
+  collection before switching to `BAAI/bge-m3`.
 - Vector store: Chroma (file-backed, zero-ops).
 - Sources: race databases (UTMB / ITRA), gear catalogues, sports-medicine references.
 - Skip retrieval for chit-chat and pure-opinion questions.
