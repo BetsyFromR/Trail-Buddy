@@ -20,6 +20,8 @@ RAG settings live in `rag_config.toml`. Set `store_dir` to the store root that
 contains `data/raw/`, `data/processed/`, and `indexes/chroma/`. The default is
 `rag_store` inside this project. Env vars such as `TRAIL_BUDDY_RAG_RETRIEVER_K`
 still override the file when needed.
+Set `use_bm25 = true` to fuse BM25 matches over the stored Chroma documents
+with vector matches using Reciprocal Rank Fusion.
 
 Logs are written to `logs/trail_buddy.log` and `logs/trail_buddy.error.log`.
 Override the location or verbosity with `TRAIL_BUDDY_LOG_DIR` and

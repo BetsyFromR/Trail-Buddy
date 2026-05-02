@@ -30,6 +30,13 @@ def _int_env(name: str, default: int) -> int:
     return int(raw)
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().casefold() in {"1", "true", "yes", "on"}
+
+
 def _config_file_path() -> Path:
     return _path_env("TRAIL_BUDDY_RAG_CONFIG_FILE", DEFAULT_RAG_CONFIG_FILE)
 
@@ -61,6 +68,15 @@ def _config_int(config: dict[str, Any], key: str, default: int) -> int:
     if value is None or value == "":
         return default
     return int(value)
+
+
+def _config_bool(config: dict[str, Any], key: str, default: bool) -> bool:
+    value = config.get(key, default)
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().casefold() in {"1", "true", "yes", "on"}
 
 
 def _path_config(config: dict[str, Any], key: str, default: Path) -> Path:
@@ -119,6 +135,9 @@ class RetrievalSettings:
     )
     embedding_model: str = "all-MiniLM-L6-v2"
     retriever_k: int = 5
+    use_bm25: bool = False
+    bm25_k: int = 10
+    rrf_rank_constant: int = 60
 
     @property
     def data_dir(self) -> Path:
@@ -168,6 +187,18 @@ def get_retrieval_settings() -> RetrievalSettings:
         retriever_k=_int_env(
             "TRAIL_BUDDY_RAG_RETRIEVER_K",
             _config_int(config, "retriever_k", 5),
+        ),
+        use_bm25=_bool_env(
+            "TRAIL_BUDDY_RAG_USE_BM25",
+            _config_bool(config, "use_bm25", False),
+        ),
+        bm25_k=_int_env(
+            "TRAIL_BUDDY_RAG_BM25_K",
+            _config_int(config, "bm25_k", 10),
+        ),
+        rrf_rank_constant=_int_env(
+            "TRAIL_BUDDY_RAG_RRF_RANK_CONSTANT",
+            _config_int(config, "rrf_rank_constant", 60),
         ),
     )
 

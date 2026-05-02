@@ -1,4 +1,5 @@
 import pytest
+from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import HumanMessage
 
@@ -10,6 +11,7 @@ from trail_buddy.retrieval.config import (
     available_raw_document_paths,
     get_retrieval_settings,
 )
+from trail_buddy.retrieval.service import _bm25_search, _reciprocal_rank_fusion
 
 
 def _invoke(graph, text: str, thread: str):
@@ -99,6 +101,9 @@ def test_retrieval_settings_resolve_external_store(monkeypatch, tmp_path):
     monkeypatch.setenv("TRAIL_BUDDY_RAG_COLLECTION", "test_collection")
     monkeypatch.setenv("TRAIL_BUDDY_RAG_EMBEDDING_MODEL", "test-embedding")
     monkeypatch.setenv("TRAIL_BUDDY_RAG_RETRIEVER_K", "7")
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_USE_BM25", "true")
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_BM25_K", "11")
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_RRF_RANK_CONSTANT", "42")
 
     settings = get_retrieval_settings()
 
@@ -110,6 +115,35 @@ def test_retrieval_settings_resolve_external_store(monkeypatch, tmp_path):
     assert settings.collection_name == "test_collection"
     assert settings.embedding_model == "test-embedding"
     assert settings.retriever_k == 7
+    assert settings.use_bm25 is True
+    assert settings.bm25_k == 11
+    assert settings.rrf_rank_constant == 42
+
+
+def test_bm25_search_ranks_keyword_matches():
+    documents = [
+        Document(page_content="hydration vest bottles mountain race", metadata={"id": "a"}),
+        Document(page_content="road shoes track intervals", metadata={"id": "b"}),
+        Document(page_content="mountain race poles steep climb", metadata={"id": "c"}),
+    ]
+
+    results = _bm25_search("mountain race poles", documents, k=2)
+
+    assert [doc.metadata["id"] for doc in results] == ["c", "a"]
+
+
+def test_reciprocal_rank_fusion_merges_duplicate_docs():
+    vector_only = Document(page_content="vector only", metadata={"id": "vector"})
+    shared = Document(page_content="shared", metadata={"id": "shared"})
+    bm25_only = Document(page_content="bm25 only", metadata={"id": "bm25"})
+
+    results = _reciprocal_rank_fusion(
+        [[vector_only, shared], [shared, bm25_only]],
+        top_n=2,
+        rank_constant=60,
+    )
+
+    assert [doc.metadata["id"] for doc in results] == ["shared", "vector"]
 
 
 def test_relative_rag_store_path_resolves_from_project_root(monkeypatch):

@@ -30,6 +30,9 @@ store_dir = "rag_store"
 collection = ""
 embedding_model = "all-MiniLM-L6-v2"
 retriever_k = 5
+use_bm25 = false
+bm25_k = 10
+rrf_rank_constant = 60
 ```
 
 `store_dir` defaults to `./rag_store` inside the project root. Empty
@@ -39,9 +42,21 @@ best `retriever_k` results overall. Set `collection` only if you want to force a
 single collection. All raw `*.jsonl` files under `rag_store/data/raw/` are
 discovered by path; the app does not require a specific filename.
 
+Set `use_bm25 = true` to also rank the stored Chroma documents with BM25. When
+BM25 is enabled, the app fetches vector candidates and BM25 candidates, merges
+duplicate documents, scores them with Reciprocal Rank Fusion, and returns the
+top `retriever_k` results:
+
+```text
+doc_score = 1 / (rank_vector + rrf_rank_constant)
+          + 1 / (rank_bm25 + rrf_rank_constant)
+```
+
 Env vars still override the file: `TRAIL_BUDDY_RAG_STORE_DIR`,
 `TRAIL_BUDDY_RAG_COLLECTION`, `TRAIL_BUDDY_RAG_EMBEDDING_MODEL`, and
-`TRAIL_BUDDY_RAG_RETRIEVER_K`. Set `TRAIL_BUDDY_RAG_CONFIG_FILE` to use a
+`TRAIL_BUDDY_RAG_RETRIEVER_K`. BM25 can be controlled with
+`TRAIL_BUDDY_RAG_USE_BM25`, `TRAIL_BUDDY_RAG_BM25_K`, and
+`TRAIL_BUDDY_RAG_RRF_RANK_CONSTANT`. Set `TRAIL_BUDDY_RAG_CONFIG_FILE` to use a
 different config file.
 
 ## Check RAG
