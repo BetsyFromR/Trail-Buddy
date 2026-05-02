@@ -1,10 +1,16 @@
 import logging
 
+from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage
 
 from trail_buddy.prompts import render_system_prompt
-from trail_buddy.retrieval import RetrievalUnavailable, retrieve_context
+from trail_buddy.retrieval import (
+    RetrievalTrace,
+    RetrievalUnavailable,
+    format_retrieved_docs,
+    retrieve_with_trace,
+)
 from trail_buddy.state import State
 
 
@@ -34,33 +40,67 @@ def _latest_user_text(state: State) -> str:
     return ""
 
 
-def _doc_summary(context: str) -> str:
-    lines = [line.strip() for line in context.splitlines() if line.strip()]
-    title = next((line for line in lines if line.startswith("[") or line.startswith("Title:")), "Untitled")
-    source = next((line for line in lines if line.startswith("Source:")), "Source: unknown")
-    chunk_id = next((line.removeprefix("Chunk ID:").strip() for line in lines if line.startswith("Chunk ID:")), "unknown")
-    body = next(
-        (
-            line
-            for line in lines
-            if not line.startswith("[")
-            and not line.startswith("Title:")
-            and not line.startswith("Source:")
-            and not line.startswith("Chunk ID:")
-        ),
-        "",
+def _doc_summary(doc: Document) -> str:
+    title = doc.metadata.get("title") or "Untitled"
+    source = doc.metadata.get("url") or doc.metadata.get("source") or "unknown"
+    collection = doc.metadata.get("collection") or "unknown"
+    chunk_id = (
+        getattr(doc, "id", None)
+        or doc.metadata.get("id")
+        or doc.metadata.get("chunk_id")
+        or "unknown"
     )
+    body = " ".join(doc.page_content.split())
     preview = body[:TEXT_PREVIEW_CHARS]
     if len(body) > TEXT_PREVIEW_CHARS:
         preview += "..."
-    return f"chunk_id={chunk_id} | {title} | {source} | text={preview}"
+    return (
+        f"chunk_id={chunk_id} | collection={collection} | title={title} | "
+        f"source={source} | text={preview}"
+    )
 
 
-def _log_retrieval_trace(query: str, retrieved: list[str]) -> None:
+def _trace_summary(trace: RetrievalTrace | None) -> str:
+    if trace is None:
+        return "retrievers=unknown | fusion=unknown"
+
+    parts = [
+        f"retrievers={','.join(trace.retrievers)}",
+        f"fusion={trace.fusion or 'none'}",
+        f"vector_k={trace.vector_k}",
+        f"collections={','.join(trace.collections) or 'none'}",
+    ]
+    if trace.bm25_k is not None:
+        parts.insert(3, f"bm25_k={trace.bm25_k}")
+    if trace.rrf_rank_constant is not None:
+        parts.insert(3, f"rrf_rank_constant={trace.rrf_rank_constant}")
+    return " | ".join(parts)
+
+
+def _log_retrieval_trace(
+    query: str,
+    docs: list[Document],
+    trace: RetrievalTrace | None = None,
+) -> None:
     logger.info("[RAG] query: %s", query)
+    logger.info("[RAG] %s", _trace_summary(trace))
+    logger.info("[RAG] retrieved_docs: %s", len(docs))
+    for index, doc in enumerate(docs, start=1):
+        logger.info("[RAG] doc %s: %s", index, _doc_summary(doc))
+
+
+def _log_legacy_retrieval_trace(query: str, retrieved: list[str]) -> None:
+    logger.info("[RAG] query: %s", query)
+    logger.info("[RAG] retrievers=custom | fusion=unknown")
     logger.info("[RAG] retrieved_docs: %s", len(retrieved))
-    for index, context in enumerate(retrieved, start=1):
-        logger.info("[RAG] doc %s: %s", index, _doc_summary(context))
+
+
+def _log_failed_retrieval_trace(query: str, retriever) -> None:
+    if retriever is not None:
+        _log_legacy_retrieval_trace(query, [])
+        return
+
+    _log_retrieval_trace(query, [])
 
 
 def _log_answer_trace(response) -> None:
@@ -68,7 +108,7 @@ def _log_answer_trace(response) -> None:
     logger.info("[RAG] answer: %s", answer)
 
 
-def make_retrieve_node(retriever=retrieve_context):
+def make_retrieve_node(retriever=None):
     def _retrieve_node(state: State) -> dict:
         query = _latest_user_text(state)
         if not query.strip():
@@ -76,16 +116,22 @@ def make_retrieve_node(retriever=retrieve_context):
             return {"retrieved": []}
 
         try:
-            retrieved = retriever(query)
-            _log_retrieval_trace(query, retrieved)
+            if retriever is not None:
+                retrieved = retriever(query)
+                _log_legacy_retrieval_trace(query, retrieved)
+                return {"retrieved": retrieved}
+
+            docs, trace = retrieve_with_trace(query)
+            retrieved = format_retrieved_docs(docs)
+            _log_retrieval_trace(query, docs, trace)
             return {"retrieved": retrieved}
         except RetrievalUnavailable as exc:
             logger.warning("[RAG] retrieval_unavailable: %s", exc)
-            _log_retrieval_trace(query, [])
+            _log_failed_retrieval_trace(query, retriever)
             return {"retrieved": []}
         except Exception:
             logger.exception("[RAG] retrieval_error")
-            _log_retrieval_trace(query, [])
+            _log_failed_retrieval_trace(query, retriever)
             return {"retrieved": []}
 
     return _retrieve_node

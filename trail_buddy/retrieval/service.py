@@ -4,6 +4,7 @@ import hashlib
 import math
 import re
 from collections import Counter
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,16 @@ from trail_buddy.retrieval.config import (
 
 class RetrievalUnavailable(RuntimeError):
     """Raised when the configured local RAG store cannot be queried."""
+
+
+@dataclass(frozen=True)
+class RetrievalTrace:
+    retrievers: list[str]
+    fusion: str | None
+    rrf_rank_constant: int | None
+    vector_k: int
+    bm25_k: int | None
+    collections: list[str]
 
 
 _TOKEN_PATTERN = re.compile(r"(?u)\b\w+\b")
@@ -192,10 +203,10 @@ def format_retrieved_docs(docs: list[Document]) -> list[str]:
     return [_format_doc(doc, index) for index, doc in enumerate(docs, start=1)]
 
 
-def retrieve_documents(
+def retrieve_with_trace(
     query: str,
     settings: RetrievalSettings | None = None,
-) -> list[Document]:
+) -> tuple[list[Document], RetrievalTrace]:
     resolved = settings or get_retrieval_settings()
     collection_names = (
         [resolved.collection_name]
@@ -211,6 +222,14 @@ def retrieve_documents(
         max(resolved.retriever_k, resolved.bm25_k)
         if resolved.use_bm25
         else resolved.retriever_k
+    )
+    trace = RetrievalTrace(
+        retrievers=["vector", "bm25"] if resolved.use_bm25 else ["vector"],
+        fusion="rrf" if resolved.use_bm25 else None,
+        rrf_rank_constant=resolved.rrf_rank_constant if resolved.use_bm25 else None,
+        vector_k=vector_k,
+        bm25_k=resolved.bm25_k if resolved.use_bm25 else None,
+        collections=collection_names,
     )
     scored_docs: list[tuple[Document, float]] = []
     bm25_corpus: list[Document] = []
@@ -234,17 +253,28 @@ def retrieve_documents(
     scored_docs.sort(key=lambda item: item[1])
     vector_docs = [doc for doc, _score in scored_docs[:vector_k]]
     if not resolved.use_bm25:
-        return vector_docs[:resolved.retriever_k]
+        return vector_docs[:resolved.retriever_k], trace
 
     bm25_docs = _bm25_search(query, bm25_corpus, k=resolved.bm25_k)
     if not bm25_docs:
-        return vector_docs[:resolved.retriever_k]
+        return vector_docs[:resolved.retriever_k], trace
 
-    return _reciprocal_rank_fusion(
-        [vector_docs, bm25_docs],
-        top_n=resolved.retriever_k,
-        rank_constant=resolved.rrf_rank_constant,
+    return (
+        _reciprocal_rank_fusion(
+            [vector_docs, bm25_docs],
+            top_n=resolved.retriever_k,
+            rank_constant=resolved.rrf_rank_constant,
+        ),
+        trace,
     )
+
+
+def retrieve_documents(
+    query: str,
+    settings: RetrievalSettings | None = None,
+) -> list[Document]:
+    docs, _trace = retrieve_with_trace(query, settings=settings)
+    return docs
 
 
 def retrieve_context(

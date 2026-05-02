@@ -4,7 +4,9 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import HumanMessage
 
 from trail_buddy.graph import build_graph
+from trail_buddy.nodes import _doc_summary, _trace_summary
 from trail_buddy.prompts import render_system_prompt
+from trail_buddy.retrieval import RetrievalTrace, format_retrieved_docs
 from trail_buddy.retrieval.config import (
     PROJECT_ROOT,
     available_collection_names,
@@ -93,7 +95,85 @@ def test_graph_continues_when_retriever_fails(caplog):
     assert result["messages"][-1].content == "Answer without retrieved context."
     assert "[RAG] retrieval_error" in caplog.text
     assert "RuntimeError: embedding model unavailable" in caplog.text
+    assert "[RAG] retrievers=custom | fusion=unknown" in caplog.text
     assert "[RAG] retrieved_docs: 0" in caplog.text
+
+
+def test_doc_summary_uses_document_text_not_collection_metadata():
+    doc = Document(
+        page_content="Actual article text starts here.",
+        metadata={
+            "title": "Trail poles guide",
+            "source": "https://example.test/poles",
+            "collection": "trail_buddy_irunfar",
+            "chunk_id": "chunk-1",
+        },
+    )
+
+    summary = _doc_summary(doc)
+
+    assert "collection=trail_buddy_irunfar" in summary
+    assert "title=Trail poles guide" in summary
+    assert "source=https://example.test/poles" in summary
+    assert "text=Actual article text starts here." in summary
+    assert "text=Collection:" not in summary
+
+
+def test_trace_summary_logs_vector_only_retriever():
+    trace = RetrievalTrace(
+        retrievers=["vector"],
+        fusion=None,
+        rrf_rank_constant=None,
+        vector_k=5,
+        bm25_k=None,
+        collections=["trail_buddy_irunfar"],
+    )
+
+    assert _trace_summary(trace) == (
+        "retrievers=vector | fusion=none | vector_k=5 | "
+        "collections=trail_buddy_irunfar"
+    )
+
+
+def test_trace_summary_logs_bm25_and_rrf():
+    trace = RetrievalTrace(
+        retrievers=["vector", "bm25"],
+        fusion="rrf",
+        rrf_rank_constant=60,
+        vector_k=10,
+        bm25_k=10,
+        collections=["trail_buddy_irunfar", "trail_buddy_gear"],
+    )
+
+    assert _trace_summary(trace) == (
+        "retrievers=vector,bm25 | fusion=rrf | vector_k=10 | "
+        "rrf_rank_constant=60 | bm25_k=10 | "
+        "collections=trail_buddy_irunfar,trail_buddy_gear"
+    )
+
+
+def test_format_retrieved_docs_keeps_prompt_context_shape():
+    doc = Document(
+        page_content="Actual article text starts here.",
+        metadata={
+            "title": "Trail poles guide",
+            "source": "https://example.test/poles",
+            "collection": "trail_buddy_irunfar",
+            "chunk_id": "chunk-1",
+        },
+    )
+
+    assert format_retrieved_docs([doc]) == [
+        "\n".join(
+            [
+                "[1] Title: Trail poles guide",
+                "Source: https://example.test/poles",
+                "Collection: trail_buddy_irunfar",
+                "Chunk ID: chunk-1",
+                "Actual article text starts here.",
+            ]
+        )
+    ]
 
 
 def test_retrieval_settings_resolve_external_store(monkeypatch, tmp_path):
