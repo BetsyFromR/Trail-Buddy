@@ -1,0 +1,14 @@
+[rag]
+# Relative paths resolve from the project root.
+store_dir = "rag_store"
+
+# Leave empty to search all collections found in indexes/chroma/chroma.sqlite3.
+collection = ""
+
+embedding_model = "all-MiniLM-L6-v2"
+retriever_k = 5
+
+# When enabled, vector matches are fused with BM25 matches over stored Chroma docs.
+use_bm25 = false
+bm25_k = 10
+rrf_rank_constant = 60

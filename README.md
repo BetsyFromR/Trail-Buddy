@@ -16,9 +16,12 @@ cp .env.example .env
 
 `TRAIL_BUDDY_MODEL` is a LiteLLM model id — `anthropic/claude-sonnet-4-5`, `openai/gpt-4.1`, `ollama/qwen2.5:32b`, etc. Switching providers needs no code change.
 
-RAG data is kept outside the chat app. Set `TRAIL_BUDDY_RAG_STORE_DIR` to the
-store root that contains `data/raw/`, `data/processed/`, and `indexes/chroma/`.
-The default is `rag_store` inside this project.
+RAG settings live in `rag_config.toml`. Set `store_dir` to the store root that
+contains `data/raw/`, `data/processed/`, and `indexes/chroma/`. The default is
+`rag_store` inside this project. Env vars such as `TRAIL_BUDDY_RAG_RETRIEVER_K`
+still override the file when needed.
+Set `use_bm25 = true` to fuse BM25 matches over the stored Chroma documents
+with vector matches using Reciprocal Rank Fusion.
 
 Logs are written to `logs/trail_buddy.log` and `logs/trail_buddy.error.log`.
 Override the location or verbosity with `TRAIL_BUDDY_LOG_DIR` and
@@ -47,9 +50,9 @@ tests/            pytest smoke tests
 
 ## RAG
 
-`trail_buddy/retrieval/` reads a user-provided Chroma store from
-`TRAIL_BUDDY_RAG_STORE_DIR`. If retrieval is unavailable, the graph logs the
-failure and answers without retrieved context.
+`trail_buddy/retrieval/` reads RAG settings from `rag_config.toml`, then reads a
+user-provided Chroma store from the configured `store_dir`. If retrieval is
+unavailable, the graph logs the failure and answers without retrieved context.
 
 Current assumptions:
 

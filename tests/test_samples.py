@@ -1,15 +1,19 @@
 import pytest
+from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import HumanMessage
 
 from trail_buddy.graph import build_graph
+from trail_buddy.nodes import _doc_summary, _trace_summary
 from trail_buddy.prompts import render_system_prompt
+from trail_buddy.retrieval import RetrievalTrace, format_retrieved_docs
 from trail_buddy.retrieval.config import (
     PROJECT_ROOT,
     available_collection_names,
     available_raw_document_paths,
     get_retrieval_settings,
 )
+from trail_buddy.retrieval.service import _bm25_search, _reciprocal_rank_fusion
 
 
 def _invoke(graph, text: str, thread: str):
@@ -91,7 +95,85 @@ def test_graph_continues_when_retriever_fails(caplog):
     assert result["messages"][-1].content == "Answer without retrieved context."
     assert "[RAG] retrieval_error" in caplog.text
     assert "RuntimeError: embedding model unavailable" in caplog.text
+    assert "[RAG] retrievers=custom | fusion=unknown" in caplog.text
     assert "[RAG] retrieved_docs: 0" in caplog.text
+
+
+def test_doc_summary_uses_document_text_not_collection_metadata():
+    doc = Document(
+        page_content="Actual article text starts here.",
+        metadata={
+            "title": "Trail poles guide",
+            "source": "https://example.test/poles",
+            "collection": "trail_buddy_irunfar",
+            "chunk_id": "chunk-1",
+        },
+    )
+
+    summary = _doc_summary(doc)
+
+    assert "collection=trail_buddy_irunfar" in summary
+    assert "title=Trail poles guide" in summary
+    assert "source=https://example.test/poles" in summary
+    assert "text=Actual article text starts here." in summary
+    assert "text=Collection:" not in summary
+
+
+def test_trace_summary_logs_vector_only_retriever():
+    trace = RetrievalTrace(
+        retrievers=["vector"],
+        fusion=None,
+        rrf_rank_constant=None,
+        vector_k=5,
+        bm25_k=None,
+        collections=["trail_buddy_irunfar"],
+    )
+
+    assert _trace_summary(trace) == (
+        "retrievers=vector | fusion=none | vector_k=5 | "
+        "collections=trail_buddy_irunfar"
+    )
+
+
+def test_trace_summary_logs_bm25_and_rrf():
+    trace = RetrievalTrace(
+        retrievers=["vector", "bm25"],
+        fusion="rrf",
+        rrf_rank_constant=60,
+        vector_k=10,
+        bm25_k=10,
+        collections=["trail_buddy_irunfar", "trail_buddy_gear"],
+    )
+
+    assert _trace_summary(trace) == (
+        "retrievers=vector,bm25 | fusion=rrf | vector_k=10 | "
+        "rrf_rank_constant=60 | bm25_k=10 | "
+        "collections=trail_buddy_irunfar,trail_buddy_gear"
+    )
+
+
+def test_format_retrieved_docs_keeps_prompt_context_shape():
+    doc = Document(
+        page_content="Actual article text starts here.",
+        metadata={
+            "title": "Trail poles guide",
+            "source": "https://example.test/poles",
+            "collection": "trail_buddy_irunfar",
+            "chunk_id": "chunk-1",
+        },
+    )
+
+    assert format_retrieved_docs([doc]) == [
+        "\n".join(
+            [
+                "[1] Title: Trail poles guide",
+                "Source: https://example.test/poles",
+                "Collection: trail_buddy_irunfar",
+                "Chunk ID: chunk-1",
+                "Actual article text starts here.",
+            ]
+        )
+    ]
 
 
 def test_retrieval_settings_resolve_external_store(monkeypatch, tmp_path):
@@ -99,6 +181,9 @@ def test_retrieval_settings_resolve_external_store(monkeypatch, tmp_path):
     monkeypatch.setenv("TRAIL_BUDDY_RAG_COLLECTION", "test_collection")
     monkeypatch.setenv("TRAIL_BUDDY_RAG_EMBEDDING_MODEL", "test-embedding")
     monkeypatch.setenv("TRAIL_BUDDY_RAG_RETRIEVER_K", "7")
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_USE_BM25", "true")
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_BM25_K", "11")
+    monkeypatch.setenv("TRAIL_BUDDY_RAG_RRF_RANK_CONSTANT", "42")
 
     settings = get_retrieval_settings()
 
@@ -110,6 +195,35 @@ def test_retrieval_settings_resolve_external_store(monkeypatch, tmp_path):
     assert settings.collection_name == "test_collection"
     assert settings.embedding_model == "test-embedding"
     assert settings.retriever_k == 7
+    assert settings.use_bm25 is True
+    assert settings.bm25_k == 11
+    assert settings.rrf_rank_constant == 42
+
+
+def test_bm25_search_ranks_keyword_matches():
+    documents = [
+        Document(page_content="hydration vest bottles mountain race", metadata={"id": "a"}),
+        Document(page_content="road shoes track intervals", metadata={"id": "b"}),
+        Document(page_content="mountain race poles steep climb", metadata={"id": "c"}),
+    ]
+
+    results = _bm25_search("mountain race poles", documents, k=2)
+
+    assert [doc.metadata["id"] for doc in results] == ["c", "a"]
+
+
+def test_reciprocal_rank_fusion_merges_duplicate_docs():
+    vector_only = Document(page_content="vector only", metadata={"id": "vector"})
+    shared = Document(page_content="shared", metadata={"id": "shared"})
+    bm25_only = Document(page_content="bm25 only", metadata={"id": "bm25"})
+
+    results = _reciprocal_rank_fusion(
+        [[vector_only, shared], [shared, bm25_only]],
+        top_n=2,
+        rank_constant=60,
+    )
+
+    assert [doc.metadata["id"] for doc in results] == ["shared", "vector"]
 
 
 def test_relative_rag_store_path_resolves_from_project_root(monkeypatch):
@@ -128,7 +242,8 @@ def test_collection_names_can_be_read_from_rag_store(monkeypatch):
     if not names:
         pytest.skip(f"No Chroma collections found in configured RAG store: {settings.rag_store_dir}")
 
-    assert settings.collection_name in names
+    assert settings.collection_name is None
+    assert names
 
 
 def test_raw_document_paths_can_be_read_from_rag_store():

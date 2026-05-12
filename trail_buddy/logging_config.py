@@ -13,6 +13,7 @@ LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 MAX_LOG_BYTES = 5 * 1024 * 1024
 BACKUP_COUNT = 3
+QUIET_LOGGERS = ("LiteLLM", "litellm", "httpx", "httpcore")
 
 
 def _path_env(name: str, default: Path) -> Path:
@@ -30,8 +31,24 @@ def _log_level() -> int:
     return logging.getLevelNamesMapping().get(raw, logging.INFO)
 
 
+def _remove_stream_handlers(logger: logging.Logger) -> None:
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.StreamHandler) and not isinstance(
+            handler, RotatingFileHandler
+        ):
+            logger.removeHandler(handler)
+            handler.close()
+
+
+def _quiet_third_party_loggers() -> None:
+    for name in QUIET_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.WARNING)
+        _remove_stream_handlers(logger)
+
+
 def configure_logging() -> None:
-    """Configure app, error, and console logs once per process."""
+    """Configure app and error file logs once per process."""
     root = logging.getLogger()
     if getattr(root, "_trail_buddy_logging_configured", False):
         return
@@ -59,12 +76,10 @@ def configure_logging() -> None:
     error_file.setLevel(logging.ERROR)
     error_file.setFormatter(formatter)
 
-    console = logging.StreamHandler()
-    console.setLevel(_log_level())
-    console.setFormatter(formatter)
+    _remove_stream_handlers(root)
+    _quiet_third_party_loggers()
 
-    root.setLevel(logging.DEBUG)
+    root.setLevel(_log_level())
     root.addHandler(app_file)
     root.addHandler(error_file)
-    root.addHandler(console)
     root._trail_buddy_logging_configured = True
