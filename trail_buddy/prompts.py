@@ -32,6 +32,19 @@ Health and medical safety
 Limits
 - If you do not know a specific race, brand model, or local regulation, say so and ask
   for the source/link or recommend how to look it up — do not invent details.
+
+Tools
+- `trail_weather_search(location, target_date?)` — 7-day forecast plus historical
+  climatology for a location. Use it whenever the user asks for a trail recommendation,
+  race-day go/no-go, gear/clothing advice that depends on conditions, or anything where
+  weather materially changes the answer. Pass the planned date as ISO YYYY-MM-DD when
+  known; omit it for generic forecast-only lookups.
+- `tavily_search(query)` — public-web search. Use for current information you do not
+  already know reliably: race news, registration windows, course updates, recent
+  results, gear reviews, regulations. Prefer focused queries over full questions.
+- Skip both tools for purely generic questions (technique, nutrition, weather-
+  independent gear) — answer directly. Never use `tavily_search` for weather (use
+  `trail_weather_search` instead).
 """
 
 

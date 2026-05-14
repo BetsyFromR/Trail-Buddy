@@ -1297,6 +1297,20 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain"
+version = "1.2.17"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "langgraph" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/46/35/322d13339acb61d7a733d03a73a9ade968c64ac0eb982f497d24e22a998f/langchain-1.2.17.tar.gz", hash = "sha256:c30b578c0eebbde8bec9247dbbbae1a791128557b99b65c8be1e007040975d09", size = 577779, upload-time = "2026-04-30T20:25:34.626Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/cf/b183dba8667f7b6d1be546fb8089a3bc3bc12b514f551f5317ae03815770/langchain-1.2.17-py3-none-any.whl", hash = "sha256:ff881cdfbe90e0b6afac42eea7999657c282cc73db059c910d803f4e9f8ff305", size = 113131, upload-time = "2026-04-30T20:25:32.895Z" },
+]
+
+[[package]]
 name = "langchain-chroma"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1369,6 +1383,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5c/51/1157009b6f94e6e58be58fa8b620187d657909a8b36a6bf5b0c52a2711f6/langchain_protocol-0.0.12.tar.gz", hash = "sha256:5e14c434290a705c9510fdb1a83ecf7561a5e6e0dfd053930ade80dba069269f", size = 6408, upload-time = "2026-04-25T01:05:01.489Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/95/82/3431e3061c917439589fa88a6b23c9bc0e154cba0f05d2e895a68c76ff74/langchain_protocol-0.0.12-py3-none-any.whl", hash = "sha256:402b61f42d4139692528cf37226c367bb6efc8ff8165b29380accb0abfece7b2", size = 6639, upload-time = "2026-04-25T01:05:00.487Z" },
+]
+
+[[package]]
+name = "langchain-tavily"
+version = "0.2.18"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "langchain" },
+    { name = "langchain-core" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d6/6c/b309ef3062b189a82463dc93553804566e71aa393f9ba8954750793c1a6f/langchain_tavily-0.2.18.tar.gz", hash = "sha256:cd7859ae1a6ce79236580ef67072ff5fc43c7ded94e7eac38ff04209ca85a320", size = 25378, upload-time = "2026-04-16T15:23:24.526Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/9c/0c043e4434b1823f0ac194f66036cbb0569275a99dcb890e0891ecd34fb2/langchain_tavily-0.2.18-py3-none-any.whl", hash = "sha256:dccf3ad1c50e2cb2a89bec11727555805c9df8abd42c1f3ad42ccad86e28aa44", size = 30814, upload-time = "2026-04-16T15:23:23.424Z" },
 ]
 
 [[package]]
@@ -3447,10 +3476,12 @@ source = { editable = "." }
 dependencies = [
     { name = "chromadb" },
     { name = "gradio" },
+    { name = "httpx" },
     { name = "langchain-chroma" },
     { name = "langchain-core" },
     { name = "langchain-huggingface" },
     { name = "langchain-litellm" },
+    { name = "langchain-tavily" },
     { name = "langgraph" },
     { name = "litellm" },
     { name = "pydantic" },
@@ -3469,10 +3500,12 @@ dev = [
 requires-dist = [
     { name = "chromadb", specifier = ">=0.5.0" },
     { name = "gradio", specifier = ">=6.13.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "langchain-chroma", specifier = ">=0.1.0" },
     { name = "langchain-core", specifier = ">=1.3.2" },
     { name = "langchain-huggingface", specifier = ">=0.1.0" },
     { name = "langchain-litellm", specifier = ">=0.6.4" },
+    { name = "langchain-tavily", specifier = ">=0.1.0" },
     { name = "langgraph", specifier = ">=1.1.10" },
     { name = "litellm", specifier = ">=1.83.14" },
     { name = "pydantic", specifier = ">=2.12.5" },
