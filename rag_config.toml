@@ -2,7 +2,9 @@
 # Relative paths resolve from the project root.
 store_dir = "rag_store"
 
-# Leave empty to search all collections found in indexes/chroma/chroma.sqlite3.
+# Leave empty to search all collections found in the resolved Chroma index.
+# The default path is indexes/chroma/chroma.sqlite3; if that does not exist and
+# indexes/ contains exactly one named Chroma index, that index is used.
 collection = ""
 
 embedding_model = "all-MiniLM-L6-v2"

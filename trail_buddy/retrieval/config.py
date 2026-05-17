@@ -89,12 +89,35 @@ def _path_config(config: dict[str, Any], key: str, default: Path) -> Path:
     return path
 
 
+def _default_chroma_dir(rag_store_dir: Path = DEFAULT_RAG_STORE) -> Path:
+    return rag_store_dir / "indexes" / "chroma"
+
+
+def resolve_chroma_dir(rag_store_dir: Path = DEFAULT_RAG_STORE) -> Path:
+    default_dir = _default_chroma_dir(rag_store_dir)
+    if (default_dir / "chroma.sqlite3").exists():
+        return default_dir
+
+    candidates = sorted(
+        path.parent
+        for path in (rag_store_dir / "indexes").glob("*/chroma.sqlite3")
+        if path.is_file()
+    )
+    if len(candidates) == 1:
+        return candidates[0]
+
+    return default_dir
+
+
 def chroma_db_path(rag_store_dir: Path = DEFAULT_RAG_STORE) -> Path:
-    return rag_store_dir / "indexes" / "chroma" / "chroma.sqlite3"
+    return resolve_chroma_dir(rag_store_dir) / "chroma.sqlite3"
 
 
-def available_collection_names(rag_store_dir: Path = DEFAULT_RAG_STORE) -> list[str]:
-    db_path = chroma_db_path(rag_store_dir)
+def available_collection_names(
+    rag_store_dir: Path = DEFAULT_RAG_STORE,
+    chroma_dir: Path | None = None,
+) -> list[str]:
+    db_path = (chroma_dir or resolve_chroma_dir(rag_store_dir)) / "chroma.sqlite3"
     if not db_path.exists():
         return []
 
@@ -157,7 +180,7 @@ class RetrievalSettings:
 
     @property
     def chroma_dir(self) -> Path:
-        return self.indexes_dir / "chroma"
+        return resolve_chroma_dir(self.rag_store_dir)
 
     @property
     def document_paths(self) -> list[Path]:

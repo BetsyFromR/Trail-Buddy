@@ -211,7 +211,7 @@ def retrieve_with_trace(
     collection_names = (
         [resolved.collection_name]
         if resolved.collection_name
-        else available_collection_names(resolved.rag_store_dir)
+        else available_collection_names(resolved.rag_store_dir, resolved.chroma_dir)
     )
     if not collection_names:
         raise RetrievalUnavailable(

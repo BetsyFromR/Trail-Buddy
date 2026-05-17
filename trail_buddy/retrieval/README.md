@@ -38,9 +38,12 @@ rrf_rank_constant = 60
 `store_dir` defaults to `./rag_store` inside the project root. Empty
 `collection` means the app searches all collections discovered in
 `rag_store/indexes/chroma/chroma.sqlite3`, merges their matches, and keeps the
-best `retriever_k` results overall. Set `collection` only if you want to force a
-single collection. All raw `*.jsonl` files under `rag_store/data/raw/` are
-discovered by path; the app does not require a specific filename.
+best `retriever_k` results overall. If `indexes/chroma/chroma.sqlite3` is not
+present and `indexes/` contains exactly one named Chroma index directory, the app
+uses that directory instead, for example `indexes/irunfar_training/chroma.sqlite3`.
+Set `collection` only if you want to force a single collection. All raw `*.jsonl`
+files under `rag_store/data/raw/` are discovered by path; the app does not
+require a specific filename.
 
 Set `use_bm25 = true` to also rank the stored Chroma documents with BM25. When
 BM25 is enabled, the app fetches vector candidates and BM25 candidates, merges

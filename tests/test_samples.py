@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
@@ -9,6 +11,7 @@ from trail_buddy.prompts import render_system_prompt
 from trail_buddy.retrieval import RetrievalTrace, format_retrieved_docs
 from trail_buddy.retrieval.config import (
     PROJECT_ROOT,
+    RetrievalSettings,
     available_collection_names,
     available_raw_document_paths,
     get_retrieval_settings,
@@ -244,6 +247,21 @@ def test_collection_names_can_be_read_from_rag_store(monkeypatch):
 
     assert settings.collection_name is None
     assert names
+
+
+def test_single_named_chroma_index_is_discovered(tmp_path):
+    chroma_dir = tmp_path / "indexes" / "irunfar_training"
+    chroma_dir.mkdir(parents=True)
+    with sqlite3.connect(chroma_dir / "chroma.sqlite3") as connection:
+        connection.execute("create table collections (name text)")
+        connection.execute("insert into collections values ('irunfar_training')")
+
+    settings = RetrievalSettings(rag_store_dir=tmp_path)
+
+    assert settings.chroma_dir == chroma_dir
+    assert available_collection_names(settings.rag_store_dir, settings.chroma_dir) == [
+        "irunfar_training"
+    ]
 
 
 def test_raw_document_paths_can_be_read_from_rag_store():
