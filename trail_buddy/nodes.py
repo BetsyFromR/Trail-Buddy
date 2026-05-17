@@ -149,7 +149,19 @@ def _non_system_messages(messages):
     ]
 
 
-def make_advisor_node(llm: BaseChatModel):
+def make_advisor_node(llm: BaseChatModel, tools=None):
+    """Build the advisor node. If ``tools`` is given they are bound to the LLM so
+    the model can emit tool_calls; the graph routes those to a ToolNode.
+    """
+    if tools:
+        try:
+            bound_llm = llm.bind_tools(tools)
+        except (NotImplementedError, AttributeError):
+            logger.warning("[tools] llm.bind_tools unsupported; running without tools")
+            bound_llm = llm
+    else:
+        bound_llm = llm
+
     def advisor_node(state: State) -> dict:
         system = SystemMessage(
             content=render_system_prompt(
@@ -157,7 +169,7 @@ def make_advisor_node(llm: BaseChatModel):
                 retrieved=state.get("retrieved") or [],
             )
         )
-        response = llm.invoke([system, *_non_system_messages(state["messages"])])
+        response = bound_llm.invoke([system, *_non_system_messages(state["messages"])])
         _log_answer_trace(response)
         return {"messages": [response]}
 
