@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from typing import Any
 
 from langchain_core.tools import tool
 
 from trail_buddy.weather.service import (
+    OPEN_METEO_MAX_FORECAST_DAYS,
     WeatherUnavailable,
     fetch_forecast,
     fetch_historical,
@@ -48,29 +50,26 @@ def _label(code: Any) -> str:
         return "unknown"
 
 
-def _format_forecast(payload: dict[str, Any]) -> str:
+def _forecast_days_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     daily = payload.get("daily") or {}
     times = daily.get("time") or []
-    if not times:
-        return "Forecast: no data."
-
-    rows: list[str] = []
+    rows: list[dict[str, Any]] = []
     for i, day in enumerate(times):
         try:
-            tmin = daily["temperature_2m_min"][i]
-            tmax = daily["temperature_2m_max"][i]
-            precip = daily["precipitation_sum"][i]
-            precip_h = daily["precipitation_hours"][i]
-            wind = daily["windspeed_10m_max"][i]
-            code = daily["weathercode"][i]
+            row = {
+                "date": day,
+                "tmin_c": daily["temperature_2m_min"][i],
+                "tmax_c": daily["temperature_2m_max"][i],
+                "precip_mm": daily["precipitation_sum"][i],
+                "precip_hours": daily["precipitation_hours"][i],
+                "wind_kmh_max": daily["windspeed_10m_max"][i],
+                "weather_code": daily["weathercode"][i],
+            }
         except (KeyError, IndexError, TypeError):
             continue
-        rows.append(
-            f"  {day}: {tmin}–{tmax}°C, "
-            f"precip {precip} mm over {precip_h} h, "
-            f"wind {wind} km/h, {_label(code)}"
-        )
-    return "Forecast (daily):\n" + "\n".join(rows)
+        row["weather"] = _label(row["weather_code"])
+        rows.append(row)
+    return rows
 
 
 def _aggregate_year(daily: dict[str, Any]) -> dict[str, Any] | None:
@@ -85,36 +84,28 @@ def _aggregate_year(daily: dict[str, Any]) -> dict[str, Any] | None:
         return None
     return {
         "days": len(times),
-        "tmin_avg": round(sum(tmins) / len(tmins), 1),
-        "tmax_avg": round(sum(tmaxs) / len(tmaxs), 1),
-        "precip_total": round(sum(precs), 1) if precs else 0.0,
+        "tmin_avg_c": round(sum(tmins) / len(tmins), 1),
+        "tmax_avg_c": round(sum(tmaxs) / len(tmaxs), 1),
+        "precip_total_mm": round(sum(precs), 1) if precs else 0.0,
         "precip_days": sum(1 for v in precs if v and v > 0.5),
-        "wind_max": round(max(winds), 1) if winds else 0.0,
+        "wind_max_kmh": round(max(winds), 1) if winds else 0.0,
     }
 
 
-def _format_historical(payload: dict[str, Any]) -> str:
-    target = payload.get("target_date")
-    window = payload.get("window_days")
-    years = payload.get("years") or {}
-    if not years:
-        return "Historical: no data."
-
-    rows: list[str] = []
-    for year, year_payload in sorted(years.items()):
+def _historical_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    years_payload: list[dict[str, Any]] = []
+    for year, year_payload in sorted((payload.get("years") or {}).items()):
         agg = _aggregate_year(year_payload.get("daily") or {})
-        if not agg:
-            rows.append(f"  {year}: no data")
-            continue
-        rows.append(
-            f"  {year}: "
-            f"min {agg['tmin_avg']}°C / max {agg['tmax_avg']}°C avg, "
-            f"{agg['precip_total']} mm over {agg['precip_days']} wet days, "
-            f"peak wind {agg['wind_max']} km/h"
-        )
-    return (
-        f"Historical climatology for {target} ±{window} days:\n" + "\n".join(rows)
-    )
+        years_payload.append({"year": int(year), "stats": agg})
+    return {
+        "target_date": payload.get("target_date"),
+        "window_days": payload.get("window_days"),
+        "years": years_payload,
+    }
+
+
+def _today() -> dt.date:
+    return dt.date.today()
 
 
 def _parse_date(target_date: str | None) -> dt.date | None:
@@ -128,39 +119,88 @@ def _parse_date(target_date: str | None) -> dt.date | None:
         ) from exc
 
 
+def _derive_forecast_days(parsed_date: dt.date | None, today: dt.date) -> tuple[int | None, bool, str | None]:
+    """Return (forecast_days_override, skip_forecast, note).
+
+    - No date → use env default (override=None), no skip, no note.
+    - 0..MAX days ahead → cover up through the target day.
+    - >MAX days ahead → skip forecast, leave a note.
+    - Past date → keep env default; the historical block covers the target.
+    """
+    if parsed_date is None:
+        return None, False, None
+    days_until = (parsed_date - today).days
+    if days_until > OPEN_METEO_MAX_FORECAST_DAYS:
+        return None, True, (
+            f"Target date is {days_until} days out; short-range forecast unavailable "
+            f"beyond {OPEN_METEO_MAX_FORECAST_DAYS} days. Showing historical climatology only."
+        )
+    if 0 <= days_until <= OPEN_METEO_MAX_FORECAST_DAYS:
+        return days_until + 1, False, None
+    return None, False, None
+
+
+def _error_json(location: str, message: str) -> str:
+    return json.dumps({"error": f"Weather lookup failed: {message}", "location": location})
+
+
 @tool("trail_weather_search", parse_docstring=True)
 def trail_weather_search(location: str, target_date: str | None = None) -> str:
-    """Look up trail weather: 7-day forecast plus historical climatology for the same date in prior years.
+    """Look up trail weather as JSON: forecast plus historical climatology for the same date in prior years.
+
+    Returns a JSON string with keys: ``location``, ``forecast`` (omitted when the
+    target date is beyond the short-range horizon), ``historical`` (only when
+    ``target_date`` is given), and optional ``notes``.
 
     Use this when the user asks whether to run, race, or train on a specific trail or
-    in a specific area — especially if they mention a date, weekend, or month.
+    in a specific area — especially if they mention a date, weekend, or month. Elicit
+    the date before calling whenever the answer depends on it.
 
     Args:
         location: Place name to geocode (e.g. "Boka Bay Montenegro", "Chamonix",
             "Cheget Elbrus"). Pass a city, region, or named trail area.
-        target_date: Optional ISO date (YYYY-MM-DD) for historical lookup. If omitted,
-            only the forecast is returned. Pass the user's planned run date when known.
+        target_date: Optional ISO date (YYYY-MM-DD). Drives both the forecast horizon
+            (covers up through that day, up to 16 days out) and the historical
+            climatology lookup. Beyond 16 days out the forecast is omitted and only
+            historical norms are returned.
     """
     logger.info("[weather] tool_call location=%r target_date=%r", location, target_date)
-    parsed_date = _parse_date(target_date)
     try:
+        parsed_date = _parse_date(target_date)
+        forecast_days, skip_forecast, note = _derive_forecast_days(parsed_date, _today())
+
         geo = geocode(location)
-        forecast = fetch_forecast(geo.latitude, geo.longitude)
-        header = (
-            f"Location: {geo.name}"
-            + (f", {geo.country}" if geo.country else "")
-            + f" ({geo.latitude:.3f}, {geo.longitude:.3f}"
-            + (f", elev {geo.elevation_m:.0f} m" if geo.elevation_m is not None else "")
-            + ")"
-        )
-        sections = [header, _format_forecast(forecast)]
+        result: dict[str, Any] = {
+            "location": {
+                "name": geo.name,
+                "country": geo.country,
+                "latitude": geo.latitude,
+                "longitude": geo.longitude,
+                "elevation_m": geo.elevation_m,
+            }
+        }
+        notes: list[str] = []
+        if note:
+            notes.append(note)
+
+        if not skip_forecast:
+            forecast = fetch_forecast(
+                geo.latitude,
+                geo.longitude,
+                forecast_days=forecast_days,
+            )
+            result["forecast"] = {"days": _forecast_days_payload(forecast)}
+
         if parsed_date is not None:
             historical = fetch_historical(geo.latitude, geo.longitude, parsed_date)
-            sections.append(_format_historical(historical))
-        return "\n\n".join(sections)
+            result["historical"] = _historical_payload(historical)
+
+        if notes:
+            result["notes"] = notes
+        return json.dumps(result)
     except WeatherUnavailable as exc:
         logger.warning("[weather] unavailable: %s", exc)
-        return f"Weather lookup failed: {exc}"
+        return _error_json(location, str(exc))
 
 
 WEATHER_TOOLS = [trail_weather_search]

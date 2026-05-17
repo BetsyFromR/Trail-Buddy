@@ -67,19 +67,25 @@ _FORECAST_DAILY = [
 ]
 
 
+OPEN_METEO_MAX_FORECAST_DAYS = 16
+
+
 def fetch_forecast(
     latitude: float,
     longitude: float,
     settings: WeatherSettings | None = None,
+    forecast_days: int | None = None,
 ) -> dict[str, Any]:
     resolved = settings or get_weather_settings()
+    days = forecast_days if forecast_days is not None else resolved.forecast_days
+    days = max(1, min(int(days), OPEN_METEO_MAX_FORECAST_DAYS))
     return _get_json(
         resolved.forecast_url,
         {
             "latitude": latitude,
             "longitude": longitude,
             "daily": ",".join(_FORECAST_DAILY),
-            "forecast_days": resolved.forecast_days,
+            "forecast_days": days,
             "timezone": "auto",
             "windspeed_unit": "kmh",
         },
