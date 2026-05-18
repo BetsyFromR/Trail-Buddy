@@ -14,7 +14,24 @@ logger = logging.getLogger(__name__)
 
 
 class WeatherUnavailable(RuntimeError):
-    """Raised when Open-Meteo cannot be reached or returns an unusable response."""
+    """Raised when Open-Meteo cannot be reached or returns an unusable response.
+
+    ``category`` lets callers distinguish:
+      - ``transient``  — network/HTTP issues; safe to retry.
+      - ``validation`` — caller-side bad input (empty location, bad date).
+      - ``business``   — request was well-formed but the upstream has no data.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str = "transient",
+        retryable: bool | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.retryable = bool(retryable) if retryable is not None else category == "transient"
 
 
 @dataclass(frozen=True)
@@ -24,6 +41,10 @@ class GeocodeResult:
     latitude: float
     longitude: float
     elevation_m: float | None
+    admin1: str | None = None
+
+
+DEFAULT_GEOCODE_CANDIDATES = 5
 
 
 def _get_json(url: str, params: dict[str, Any], timeout_s: float) -> dict[str, Any]:
@@ -32,29 +53,48 @@ def _get_json(url: str, params: dict[str, Any], timeout_s: float) -> dict[str, A
         response.raise_for_status()
         return response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise WeatherUnavailable(f"Open-Meteo request failed: {exc}") from exc
+        raise WeatherUnavailable(
+            f"Open-Meteo request failed: {exc}", category="transient", retryable=True
+        ) from exc
 
 
-def geocode(location: str, settings: WeatherSettings | None = None) -> GeocodeResult:
+def geocode(
+    location: str,
+    settings: WeatherSettings | None = None,
+    max_candidates: int = DEFAULT_GEOCODE_CANDIDATES,
+) -> list[GeocodeResult]:
+    """Return ranked geocoding candidates for ``location`` (best first).
+
+    The caller decides what to do when more than one result comes back — there's
+    no silent pick, so disambiguation can happen up at the tool/LLM layer.
+    """
     if not location.strip():
-        raise WeatherUnavailable("Empty location.")
+        raise WeatherUnavailable("Empty location.", category="validation", retryable=False)
     resolved = settings or get_weather_settings()
+    count = max(1, int(max_candidates))
     payload = _get_json(
         resolved.geocode_url,
-        {"name": location, "count": 1, "language": "en", "format": "json"},
+        {"name": location, "count": count, "language": "en", "format": "json"},
         resolved.request_timeout_s,
     )
     results = payload.get("results") or []
     if not results:
-        raise WeatherUnavailable(f"No coordinates found for {location!r}.")
-    top = results[0]
-    return GeocodeResult(
-        name=top.get("name") or location,
-        country=top.get("country"),
-        latitude=float(top["latitude"]),
-        longitude=float(top["longitude"]),
-        elevation_m=float(top["elevation"]) if top.get("elevation") is not None else None,
-    )
+        raise WeatherUnavailable(
+            f"No coordinates found for {location!r}.",
+            category="business",
+            retryable=False,
+        )
+    return [
+        GeocodeResult(
+            name=item.get("name") or location,
+            country=item.get("country"),
+            latitude=float(item["latitude"]),
+            longitude=float(item["longitude"]),
+            elevation_m=float(item["elevation"]) if item.get("elevation") is not None else None,
+            admin1=item.get("admin1"),
+        )
+        for item in results
+    ]
 
 
 _FORECAST_DAILY = [

@@ -2,8 +2,11 @@ import sqlite3
 
 import pytest
 from langchain_core.documents import Document
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langchain_core.messages import HumanMessage
+from langchain_core.language_models.fake_chat_models import (
+    FakeListChatModel,
+    FakeMessagesListChatModel,
+)
+from langchain_core.messages import AIMessage, HumanMessage
 
 from trail_buddy.graph import build_graph
 from trail_buddy.nodes import _doc_summary, _trace_summary
@@ -61,6 +64,39 @@ def test_system_prompt_includes_profile_and_retrieved():
     assert "Boka Bay" in rendered
     assert "1:30" in rendered
     assert "Retrieved context" in rendered
+
+
+def test_system_prompt_instructs_source_citation():
+    """The prompt must teach the LLM to cite retrieved sources — without this
+    rule the chunk metadata produced by format_retrieved_docs is wasted."""
+    rendered = render_system_prompt(retrieved=["Some retrieved chunk."])
+    lowered = rendered.lower()
+    assert "cite" in lowered
+    assert "retrieved context" in lowered
+
+
+def test_advisor_can_cite_sources_when_retrieval_present():
+    """Smoke test that the citation contract holds end-to-end: the retriever
+    fills the prompt with source-tagged context and the LLM is free to surface
+    that source in the answer. FakeListChatModel is deterministic, so we just
+    verify the wiring carries the URL through."""
+    cited = AIMessage(
+        content="Use poles on steep climbs (https://example.test/poles)."
+    )
+    llm = FakeMessagesListChatModel(responses=[cited])
+    graph = build_graph(
+        llm=llm,
+        retriever=lambda _query: [
+            "[1] Title: Trail poles guide\n"
+            "Source: https://example.test/poles\n"
+            "Collection: trail_buddy_irunfar\n"
+            "Chunk ID: chunk-1\n"
+            "Plant poles below the line on steep descents."
+        ],
+        tools=[],
+    )
+    result = _invoke(graph, "How to choose trail poles?", thread="cite")
+    assert "https://example.test/poles" in result["messages"][-1].content
 
 
 def test_state_has_messages_after_invocation():

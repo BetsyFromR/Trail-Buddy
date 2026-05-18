@@ -49,23 +49,60 @@ def patch_httpx(monkeypatch):
     return routes
 
 
-def test_geocode_parses_first_result(patch_httpx):
+def test_geocode_returns_top_candidate(patch_httpx):
     patch_httpx["geocoding-api"] = {
         "results": [
             {"name": "Chamonix", "country": "France", "latitude": 45.92, "longitude": 6.87, "elevation": 1035}
         ]
     }
-    result = geocode("Chamonix")
-    assert result.name == "Chamonix"
-    assert result.country == "France"
-    assert result.latitude == pytest.approx(45.92)
-    assert result.elevation_m == pytest.approx(1035)
+    candidates = geocode("Chamonix")
+    assert len(candidates) == 1
+    top = candidates[0]
+    assert top.name == "Chamonix"
+    assert top.country == "France"
+    assert top.latitude == pytest.approx(45.92)
+    assert top.elevation_m == pytest.approx(1035)
+
+
+def test_geocode_returns_multiple_candidates(patch_httpx):
+    patch_httpx["geocoding-api"] = {
+        "results": [
+            {
+                "name": "Boka",
+                "country": "Montenegro",
+                "admin1": "Kotor",
+                "latitude": 42.45,
+                "longitude": 18.7,
+                "elevation": 0,
+            },
+            {
+                "name": "Boka",
+                "country": "India",
+                "admin1": "West Bengal",
+                "latitude": 25.0,
+                "longitude": 88.0,
+                "elevation": 30,
+            },
+        ]
+    }
+    candidates = geocode("Boka Bay")
+    assert [c.country for c in candidates] == ["Montenegro", "India"]
+    assert candidates[0].admin1 == "Kotor"
 
 
 def test_geocode_no_results_raises(patch_httpx):
     patch_httpx["geocoding-api"] = {"results": []}
-    with pytest.raises(WeatherUnavailable):
+    with pytest.raises(WeatherUnavailable) as exc_info:
         geocode("Nowhere-12345")
+    assert exc_info.value.category == "business"
+    assert exc_info.value.retryable is False
+
+
+def test_geocode_empty_location_is_validation_error():
+    with pytest.raises(WeatherUnavailable) as exc_info:
+        geocode("   ")
+    assert exc_info.value.category == "validation"
+    assert exc_info.value.retryable is False
 
 
 def test_fetch_forecast_passes_coordinates(patch_httpx):
@@ -170,14 +207,120 @@ def test_trail_weather_search_far_future_returns_climatology_only(monkeypatch, p
     assert any("beyond" in note for note in payload.get("notes", []))
 
 
+def _invoke_as_tool_call(args: dict, *, call_id: str = "tc-test"):
+    """Invoke the tool with a ToolCall payload so we get back a ToolMessage
+    carrying both ``content`` (for the LLM) and ``artifact`` (for observability).
+    """
+    return trail_weather_search.invoke(
+        {
+            "args": args,
+            "id": call_id,
+            "name": "trail_weather_search",
+            "type": "tool_call",
+        }
+    )
+
+
 def test_trail_weather_search_handles_failure(monkeypatch):
+    """Transient network failure must surface as a categorized artifact."""
+
     def boom(*_a, **_k):
-        raise WeatherUnavailable("network down")
+        raise WeatherUnavailable("Open-Meteo request failed: network down")
 
     monkeypatch.setattr(weather_tools, "geocode", boom)
-    payload = json.loads(trail_weather_search.invoke({"location": "Chamonix"}))
+
+    message = _invoke_as_tool_call({"location": "Chamonix"})
+
+    # Structured artifact stays in state for observability.
+    artifact = message.artifact
+    assert artifact["status"] == "error"
+    assert artifact["location"] == "Chamonix"
+    assert artifact["error"]["category"] == "transient"
+    assert artifact["error"]["retryable"] is True
+    assert "network down" in artifact["error"]["message"]
+    assert "alternatives" not in artifact["error"]
+
+    # Content (what the LLM sees) mirrors the categorization.
+    payload = json.loads(message.content)
     assert "Weather lookup failed" in payload["error"]
+    assert payload["category"] == "transient"
+    assert payload["retryable"] is True
     assert payload["location"] == "Chamonix"
+
+
+def test_trail_weather_search_validation_error_is_not_retryable(monkeypatch):
+    """Bad ISO date is a validation error — LLM should fix the call, not retry."""
+    monkeypatch.setattr(weather_tools, "_today", lambda: dt.date(2026, 5, 10))
+    message = _invoke_as_tool_call({"location": "Chamonix", "target_date": "not-a-date"})
+
+    artifact = message.artifact
+    assert artifact["error"]["category"] == "validation"
+    assert artifact["error"]["retryable"] is False
+
+
+def test_trail_weather_search_ambiguous_input_returns_candidates(monkeypatch, patch_httpx):
+    """Multiple geocoding matches: surface them as ambiguous_input + candidates."""
+    monkeypatch.setattr(weather_tools, "_today", lambda: dt.date(2026, 5, 10))
+    patch_httpx["geocoding-api"] = {
+        "results": [
+            {
+                "name": "Boka",
+                "country": "Montenegro",
+                "admin1": "Kotor",
+                "latitude": 42.45,
+                "longitude": 18.7,
+                "elevation": 0,
+            },
+            {
+                "name": "Boka",
+                "country": "India",
+                "admin1": "West Bengal",
+                "latitude": 25.0,
+                "longitude": 88.0,
+                "elevation": 30,
+            },
+        ]
+    }
+
+    message = _invoke_as_tool_call({"location": "Boka Bay"})
+
+    artifact = message.artifact
+    assert artifact["status"] == "error"
+    error = artifact["error"]
+    assert error["category"] == "ambiguous_input"
+    assert error["retryable"] is False
+    alternatives = error["alternatives"]
+    assert {alt["country"] for alt in alternatives} == {"Montenegro", "India"}
+    assert any(alt["admin1"] == "Kotor" for alt in alternatives)
+
+    # LLM-visible content carries the same candidate list under `candidates`.
+    payload = json.loads(message.content)
+    assert payload["category"] == "ambiguous_input"
+    assert {c["country"] for c in payload["candidates"]} == {"Montenegro", "India"}
+
+
+def test_trail_weather_search_success_has_ok_artifact(monkeypatch, patch_httpx):
+    """Sanity check: success path attaches a status=ok artifact mirroring content."""
+    monkeypatch.setattr(weather_tools, "_today", lambda: dt.date(2026, 5, 10))
+    patch_httpx["geocoding-api"] = {
+        "results": [
+            {"name": "Chamonix", "country": "France", "latitude": 45.92, "longitude": 6.87, "elevation": 1035}
+        ]
+    }
+    patch_httpx["api.open-meteo.com/v1/forecast"] = {
+        "daily": {
+            "time": ["2026-05-10"],
+            "temperature_2m_max": [12.0],
+            "temperature_2m_min": [3.0],
+            "precipitation_sum": [0.0],
+            "precipitation_hours": [0],
+            "windspeed_10m_max": [9.0],
+            "weathercode": [1],
+        }
+    }
+    message = _invoke_as_tool_call({"location": "Chamonix"})
+    assert message.artifact["status"] == "ok"
+    assert message.artifact["location"]["name"] == "Chamonix"
 
 
 def test_derive_forecast_days_horizons():
