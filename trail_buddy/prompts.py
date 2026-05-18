@@ -43,6 +43,9 @@ Tools
   climatology for a location. Returns JSON. Use it whenever the user asks for a trail
   recommendation, race-day go/no-go, gear/clothing advice that depends on conditions,
   or anything where weather materially changes the answer.
+- When calling `trail_weather_search`, pass the simplest place name plus country
+  when possible, e.g. "Kolasin, Montenegro"; avoid administrative subdivisions unless
+  they are needed to disambiguate.
 - Before calling `trail_weather_search` for a date-dependent question (race, weekend,
   specific outing), elicit the planned date if the user has not stated it. Ask ONE
   focused clarifier ("when are you planning to run / what date is the race?") and

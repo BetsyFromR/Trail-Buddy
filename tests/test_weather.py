@@ -161,6 +161,59 @@ def test_trail_weather_search_returns_json(monkeypatch, patch_httpx):
     assert 2024 in {y["year"] for y in historical["years"]}
 
 
+def test_trail_weather_search_retries_simpler_ascii_location(monkeypatch, patch_httpx):
+    monkeypatch.setattr(weather_tools, "_today", lambda: dt.date(2026, 5, 10))
+    queries: list[str] = []
+
+    def geocode_payload(params):
+        query = params["name"]
+        queries.append(query)
+        if query == "Kolasin, Montenegro":
+            return {
+                "results": [
+                    {
+                        "name": "Kolasin",
+                        "country": "Montenegro",
+                        "admin1": "Kolasin",
+                        "latitude": 42.82,
+                        "longitude": 19.52,
+                        "elevation": 954,
+                    }
+                ]
+            }
+        return {"results": []}
+
+    patch_httpx["geocoding-api"] = geocode_payload
+    patch_httpx["api.open-meteo.com/v1/forecast"] = {
+        "daily": {
+            "time": ["2026-05-10"],
+            "temperature_2m_max": [19.0],
+            "temperature_2m_min": [8.0],
+            "precipitation_sum": [0.0],
+            "precipitation_hours": [0],
+            "windspeed_10m_max": [10.0],
+            "weathercode": [1],
+        }
+    }
+
+    payload = json.loads(
+        trail_weather_search.invoke(
+            {"location": "Kolašin, Opština Kolašin, Montenegro"}
+        )
+    )
+
+    assert payload["location"]["name"] == "Kolasin"
+    assert payload["location"]["country"] == "Montenegro"
+    assert payload["geocoded_query"] == "Kolasin, Montenegro"
+    assert queries == [
+        "Kolašin, Opština Kolašin, Montenegro",
+        "Kolašin, Montenegro",
+        "Kolašin",
+        "Kolasin, Opstina Kolasin, Montenegro",
+        "Kolasin, Montenegro",
+    ]
+
+
 def test_trail_weather_search_skips_history_when_no_date(monkeypatch, patch_httpx):
     monkeypatch.setattr(weather_tools, "_today", lambda: dt.date(2026, 5, 10))
     patch_httpx["geocoding-api"] = {
@@ -378,6 +431,36 @@ def test_graph_routes_tool_call_and_returns_final_answer():
     contents = [getattr(m, "content", "") for m in result["messages"]]
     assert any("WEATHER stub for Chamonix on 2026-06-15" in str(c) for c in contents)
     assert result["messages"][-1].content == "Forecast looks dry — go for it."
+
+
+def test_tool_call_logs_request_not_blank_answer(caplog):
+    @tool("trail_weather_search")
+    def stub_tool(location: str, target_date: str | None = None) -> str:
+        """Stub."""
+        return f"WEATHER stub for {location} on {target_date or 'today'}"
+
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "trail_weather_search",
+                "args": {"location": "Chamonix", "target_date": "2026-06-15"},
+                "id": "call_log",
+            }
+        ],
+    )
+    final_msg = AIMessage(content="Forecast looks dry.")
+    llm = FakeMessagesListChatModel(responses=[tool_call_msg, final_msg])
+    graph = build_graph(llm=llm, retriever=lambda q: [], tools=[stub_tool])
+
+    with caplog.at_level("INFO", logger="trail_buddy.nodes"):
+        graph.invoke(
+            {"messages": [HumanMessage(content="Should I run Chamonix on June 15?")]},
+            config={"configurable": {"thread_id": "tool-log-test"}},
+        )
+
+    assert "[tools] requested: trail_weather_search" in caplog.text
+    assert "[RAG] answer: \n" not in caplog.text
 
 
 def test_graph_without_tools_keeps_linear_pipeline():

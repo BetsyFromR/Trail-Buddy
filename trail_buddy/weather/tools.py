@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import unicodedata
 from typing import Any
 
 from langchain_core.tools import tool
@@ -152,6 +153,60 @@ def _candidate_payload(candidate: Any) -> dict[str, Any]:
     }
 
 
+def _ascii_fold(text: str) -> str:
+    return (
+        unicodedata.normalize("NFKD", text)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+
+
+def _location_query_variants(location: str) -> list[str]:
+    parts = [part.strip() for part in location.split(",") if part.strip()]
+    candidates = [location.strip()]
+
+    if len(parts) >= 2:
+        candidates.append(f"{parts[0]}, {parts[-1]}")
+    if parts:
+        candidates.append(parts[0])
+
+    folded = [_ascii_fold(candidate) for candidate in candidates]
+    candidates.extend(folded)
+
+    seen: set[str] = set()
+    variants: list[str] = []
+    for candidate in candidates:
+        normalized = " ".join(candidate.split())
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            variants.append(normalized)
+    return variants
+
+
+def _geocode_with_fallbacks(location: str) -> tuple[str, list[Any]]:
+    variants = _location_query_variants(location)
+    last_error: WeatherUnavailable | None = None
+    for query in variants:
+        try:
+            candidates = geocode(query)
+        except WeatherUnavailable as exc:
+            if exc.category != "business":
+                raise
+            last_error = exc
+            continue
+        if query != location:
+            logger.info("[weather] geocode_fallback original=%r query=%r", location, query)
+        return query, candidates
+
+    if last_error is not None:
+        raise WeatherUnavailable(
+            f"No coordinates found for {location!r} after trying: {', '.join(variants)!r}.",
+            category=last_error.category,
+            retryable=last_error.retryable,
+        ) from last_error
+    return location, geocode(location)
+
+
 def _error_artifact(
     location: str,
     message: str,
@@ -215,11 +270,11 @@ def trail_weather_search(
         parsed_date = _parse_date(target_date)
         forecast_days, skip_forecast, note = _derive_forecast_days(parsed_date, _today())
 
-        candidates = geocode(location)
+        geocoded_query, candidates = _geocode_with_fallbacks(location)
         if len(candidates) > 1:
             alternatives = [_candidate_payload(c) for c in candidates]
             message = (
-                f"Multiple locations match {location!r}; ask the user which one before retrying."
+                f"Multiple locations match {geocoded_query!r}; ask the user which one before retrying."
             )
             logger.info("[weather] ambiguous_input matches=%d", len(candidates))
             return (
@@ -256,6 +311,8 @@ def trail_weather_search(
 
         if notes:
             result["notes"] = notes
+        if geocoded_query != location:
+            result["geocoded_query"] = geocoded_query
         return json.dumps(result), {"status": "ok", **result}
     except WeatherUnavailable as exc:
         logger.warning(
