@@ -6,17 +6,32 @@ import uuid
 
 import gradio as gr
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+
+load_dotenv()
 
 from trail_buddy.graph import build_graph
 from trail_buddy.logging_config import configure_logging
 
-load_dotenv()
 configure_logging()
 
 logger = logging.getLogger(__name__)
 
 graph = build_graph()
+
+
+def _content_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join(parts)
+    return str(content or "")
 
 
 def chat_fn(message: str, history: list, session_id: str):
@@ -26,9 +41,18 @@ def chat_fn(message: str, history: list, session_id: str):
     accumulated = ""
     try:
         for chunk, _meta in graph.stream(inputs, config, stream_mode="messages"):
-            token = getattr(chunk, "content", "") or ""
+            # Skip tool messages and tool-call requests; only advisor text
+            # should reach the chat bubble.
+            if isinstance(chunk, AIMessage) and getattr(chunk, "tool_calls", None):
+                continue
+            if not isinstance(chunk, (AIMessage, AIMessageChunk)):
+                continue
+            token = _content_text(getattr(chunk, "content", ""))
             if token:
-                accumulated += token
+                if isinstance(chunk, AIMessage):
+                    accumulated = token
+                else:
+                    accumulated += token
                 yield accumulated
     except Exception:
         logger.exception("Chat response streaming failed")
@@ -48,7 +72,7 @@ with gr.Blocks(title="Trail Buddy") as demo:
         examples=[
             ["I want to run a trail. Before I only run half marathons. Do you think I can cope with 35 km with 2000 elevation in Montenegro trail?"],
             ["How to choose poles for trailrunning?"],
-            ["А кроссовки надо стирать?"],
+            ["Should I wash the sneakers?"],
         ],
     )
 

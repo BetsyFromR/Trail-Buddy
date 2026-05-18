@@ -104,6 +104,15 @@ def _log_failed_retrieval_trace(query: str, retriever) -> None:
 
 
 def _log_answer_trace(response) -> None:
+    tool_calls = getattr(response, "tool_calls", None) or []
+    if tool_calls:
+        requested = ", ".join(
+            f"{call.get('name', 'unknown')}({call.get('args', {})})"
+            for call in tool_calls
+        )
+        logger.info("[tools] requested: %s", requested)
+        return
+
     answer = _message_text(getattr(response, "content", response)).strip()
     logger.info("[RAG] answer: %s", answer)
 

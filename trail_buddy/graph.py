@@ -7,7 +7,7 @@ from trail_buddy.llm import build_llm
 from trail_buddy.nodes import make_advisor_node, make_retrieve_node
 from trail_buddy.state import State
 from trail_buddy.weather import WEATHER_TOOLS
-from trail_buddy.web_search import WEB_SEARCH_TOOLS
+from trail_buddy.web_search import build_web_search_tools
 
 
 def build_graph(
@@ -25,7 +25,7 @@ def build_graph(
     """
     llm = llm or build_llm()
     checkpointer = checkpointer if checkpointer is not None else MemorySaver()
-    resolved_tools = [*WEATHER_TOOLS, *WEB_SEARCH_TOOLS] if tools is None else tools
+    resolved_tools = [*WEATHER_TOOLS, *build_web_search_tools()] if tools is None else tools
 
     graph = StateGraph(State)
     retrieve = make_retrieve_node(retriever) if retriever is not None else make_retrieve_node()

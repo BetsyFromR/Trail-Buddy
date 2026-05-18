@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import unicodedata
 from typing import Any
 
 from langchain_core.tools import tool
@@ -115,7 +116,9 @@ def _parse_date(target_date: str | None) -> dt.date | None:
         return dt.date.fromisoformat(target_date)
     except ValueError as exc:
         raise WeatherUnavailable(
-            f"target_date must be ISO YYYY-MM-DD, got {target_date!r}."
+            f"target_date must be ISO YYYY-MM-DD, got {target_date!r}.",
+            category="validation",
+            retryable=False,
         ) from exc
 
 
@@ -140,17 +143,115 @@ def _derive_forecast_days(parsed_date: dt.date | None, today: dt.date) -> tuple[
     return None, False, None
 
 
-def _error_json(location: str, message: str) -> str:
-    return json.dumps({"error": f"Weather lookup failed: {message}", "location": location})
+def _candidate_payload(candidate: Any) -> dict[str, Any]:
+    return {
+        "name": candidate.name,
+        "country": candidate.country,
+        "admin1": candidate.admin1,
+        "latitude": candidate.latitude,
+        "longitude": candidate.longitude,
+    }
 
 
-@tool("trail_weather_search", parse_docstring=True)
-def trail_weather_search(location: str, target_date: str | None = None) -> str:
+def _ascii_fold(text: str) -> str:
+    return (
+        unicodedata.normalize("NFKD", text)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+
+
+def _location_query_variants(location: str) -> list[str]:
+    parts = [part.strip() for part in location.split(",") if part.strip()]
+    candidates = [location.strip()]
+
+    if len(parts) >= 2:
+        candidates.append(f"{parts[0]}, {parts[-1]}")
+    if parts:
+        candidates.append(parts[0])
+
+    folded = [_ascii_fold(candidate) for candidate in candidates]
+    candidates.extend(folded)
+
+    seen: set[str] = set()
+    variants: list[str] = []
+    for candidate in candidates:
+        normalized = " ".join(candidate.split())
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            variants.append(normalized)
+    return variants
+
+
+def _geocode_with_fallbacks(location: str) -> tuple[str, list[Any]]:
+    variants = _location_query_variants(location)
+    last_error: WeatherUnavailable | None = None
+    for query in variants:
+        try:
+            candidates = geocode(query)
+        except WeatherUnavailable as exc:
+            if exc.category != "business":
+                raise
+            last_error = exc
+            continue
+        if query != location:
+            logger.info("[weather] geocode_fallback original=%r query=%r", location, query)
+        return query, candidates
+
+    if last_error is not None:
+        raise WeatherUnavailable(
+            f"No coordinates found for {location!r} after trying: {', '.join(variants)!r}.",
+            category=last_error.category,
+            retryable=last_error.retryable,
+        ) from last_error
+    return location, geocode(location)
+
+
+def _error_artifact(
+    location: str,
+    message: str,
+    category: str,
+    retryable: bool,
+    *,
+    alternatives: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"category": category, "retryable": retryable, "message": message}
+    if alternatives is not None:
+        error["alternatives"] = alternatives
+    return {"status": "error", "location": location, "error": error}
+
+
+def _error_content(
+    location: str,
+    message: str,
+    category: str,
+    retryable: bool,
+    *,
+    alternatives: list[dict[str, Any]] | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "error": f"Weather lookup failed: {message}",
+        "category": category,
+        "retryable": retryable,
+        "location": location,
+    }
+    if alternatives is not None:
+        payload["candidates"] = alternatives
+    return json.dumps(payload)
+
+
+@tool("trail_weather_search", parse_docstring=True, response_format="content_and_artifact")
+def trail_weather_search(
+    location: str, target_date: str | None = None
+) -> tuple[str, dict[str, Any]]:
     """Look up trail weather as JSON: forecast plus historical climatology for the same date in prior years.
 
     Returns a JSON string with keys: ``location``, ``forecast`` (omitted when the
     target date is beyond the short-range horizon), ``historical`` (only when
-    ``target_date`` is given), and optional ``notes``.
+    ``target_date`` is given), and optional ``notes``. On error the JSON instead
+    carries ``error``, ``category`` (``ambiguous_input`` / ``validation`` /
+    ``business`` / ``transient``), ``retryable``, and (for ambiguous input)
+    ``candidates`` — let the category drive the response.
 
     Use this when the user asks whether to run, race, or train on a specific trail or
     in a specific area — especially if they mention a date, weekend, or month. Elicit
@@ -169,11 +270,24 @@ def trail_weather_search(location: str, target_date: str | None = None) -> str:
         parsed_date = _parse_date(target_date)
         forecast_days, skip_forecast, note = _derive_forecast_days(parsed_date, _today())
 
-        geo = geocode(location)
+        geocoded_query, candidates = _geocode_with_fallbacks(location)
+        if len(candidates) > 1:
+            alternatives = [_candidate_payload(c) for c in candidates]
+            message = (
+                f"Multiple locations match {geocoded_query!r}; ask the user which one before retrying."
+            )
+            logger.info("[weather] ambiguous_input matches=%d", len(candidates))
+            return (
+                _error_content(location, message, "ambiguous_input", False, alternatives=alternatives),
+                _error_artifact(location, message, "ambiguous_input", False, alternatives=alternatives),
+            )
+
+        geo = candidates[0]
         result: dict[str, Any] = {
             "location": {
                 "name": geo.name,
                 "country": geo.country,
+                "admin1": geo.admin1,
                 "latitude": geo.latitude,
                 "longitude": geo.longitude,
                 "elevation_m": geo.elevation_m,
@@ -197,10 +311,20 @@ def trail_weather_search(location: str, target_date: str | None = None) -> str:
 
         if notes:
             result["notes"] = notes
-        return json.dumps(result)
+        if geocoded_query != location:
+            result["geocoded_query"] = geocoded_query
+        return json.dumps(result), {"status": "ok", **result}
     except WeatherUnavailable as exc:
-        logger.warning("[weather] unavailable: %s", exc)
-        return _error_json(location, str(exc))
+        logger.warning(
+            "[weather] unavailable category=%s retryable=%s: %s",
+            exc.category,
+            exc.retryable,
+            exc,
+        )
+        return (
+            _error_content(location, str(exc), exc.category, exc.retryable),
+            _error_artifact(location, str(exc), exc.category, exc.retryable),
+        )
 
 
 WEATHER_TOOLS = [trail_weather_search]
