@@ -25,8 +25,9 @@ def build_llm(model: str | None = None, **kwargs) -> ChatLiteLLM:
     model_id = model or os.getenv("TRAIL_BUDDY_MODEL", DEFAULT_MODEL)
     api_key_var = _required_api_key(model_id)
     if api_key_var and not os.getenv(api_key_var):
+        model_source = "TRAIL_BUDDY_MODEL" if model is None else "model"
         raise RuntimeError(
-            f"{api_key_var} is required for TRAIL_BUDDY_MODEL={model_id!r}. "
+            f"{api_key_var} is required for {model_source}={model_id!r}. "
             "Set it in .env or choose a model/provider that does not need this key."
         )
     temperature = kwargs.pop("temperature", 0.4)

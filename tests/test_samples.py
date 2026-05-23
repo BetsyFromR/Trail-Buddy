@@ -2,11 +2,8 @@ import sqlite3
 
 import pytest
 from langchain_core.documents import Document
-from langchain_core.language_models.fake_chat_models import (
-    FakeListChatModel,
-    FakeMessagesListChatModel,
-)
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langchain_core.messages import HumanMessage
 
 from trail_buddy.graph import build_graph
 from trail_buddy.nodes import _doc_summary, _trace_summary
@@ -66,24 +63,20 @@ def test_system_prompt_includes_profile_and_retrieved():
     assert "Retrieved context" in rendered
 
 
-def test_system_prompt_instructs_source_citation():
-    """The prompt must teach the LLM to cite retrieved sources — without this
-    rule the chunk metadata produced by format_retrieved_docs is wasted."""
+def test_system_prompt_avoids_source_citations_in_answers():
+    """The prompt should use retrieved context without surfacing source citations."""
     rendered = render_system_prompt(retrieved=["Some retrieved chunk."])
     lowered = rendered.lower()
-    assert "cite" in lowered
     assert "retrieved context" in lowered
+    assert "do not add" in lowered
+    assert "source citations" in lowered
+    assert "urls" in lowered
+    assert "cite the source" not in lowered
+    assert "source (url" not in lowered
 
 
-def test_advisor_can_cite_sources_when_retrieval_present():
-    """Smoke test that the citation contract holds end-to-end: the retriever
-    fills the prompt with source-tagged context and the LLM is free to surface
-    that source in the answer. FakeListChatModel is deterministic, so we just
-    verify the wiring carries the URL through."""
-    cited = AIMessage(
-        content="Use poles on steep climbs (https://example.test/poles)."
-    )
-    llm = FakeMessagesListChatModel(responses=[cited])
+def test_advisor_answers_without_source_links_when_retrieval_present():
+    llm = FakeListChatModel(responses=["Use poles on steep climbs."])
     graph = build_graph(
         llm=llm,
         retriever=lambda _query: [
@@ -95,8 +88,11 @@ def test_advisor_can_cite_sources_when_retrieval_present():
         ],
         tools=[],
     )
-    result = _invoke(graph, "How to choose trail poles?", thread="cite")
-    assert "https://example.test/poles" in result["messages"][-1].content
+    result = _invoke(graph, "How to choose trail poles?", thread="no-cite")
+    answer = result["messages"][-1].content
+    assert answer == "Use poles on steep climbs."
+    assert "https://example.test/poles" not in answer
+    assert "Source:" not in answer
 
 
 def test_state_has_messages_after_invocation():
@@ -191,7 +187,7 @@ def test_trace_summary_logs_bm25_and_rrf():
     )
 
 
-def test_format_retrieved_docs_keeps_prompt_context_shape():
+def test_format_retrieved_docs_omits_source_metadata_from_prompt_context():
     doc = Document(
         page_content="Actual article text starts here.",
         metadata={
@@ -202,17 +198,13 @@ def test_format_retrieved_docs_keeps_prompt_context_shape():
         },
     )
 
-    assert format_retrieved_docs([doc]) == [
-        "\n".join(
-            [
-                "[1] Title: Trail poles guide",
-                "Source: https://example.test/poles",
-                "Collection: trail_buddy_irunfar",
-                "Chunk ID: chunk-1",
-                "Actual article text starts here.",
-            ]
-        )
-    ]
+    formatted = format_retrieved_docs([doc])
+
+    assert formatted == ["[1] Actual article text starts here."]
+    assert "https://example.test/poles" not in formatted[0]
+    assert "Source:" not in formatted[0]
+    assert "Collection:" not in formatted[0]
+    assert "Chunk ID:" not in formatted[0]
 
 
 def test_retrieval_settings_resolve_external_store(monkeypatch, tmp_path):

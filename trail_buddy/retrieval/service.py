@@ -178,25 +178,8 @@ def _reciprocal_rank_fusion(
 
 
 def _format_doc(doc: Document, index: int) -> str:
-    title = doc.metadata.get("title") or "Untitled"
-    source = doc.metadata.get("url") or doc.metadata.get("source") or "unknown"
-    collection = doc.metadata.get("collection")
-    chunk_id = (
-        getattr(doc, "id", None)
-        or doc.metadata.get("id")
-        or doc.metadata.get("chunk_id")
-    )
     text = " ".join(doc.page_content.split())
-    parts = [
-        f"[{index}] Title: {title}",
-        f"Source: {source}",
-    ]
-    if collection:
-        parts.append(f"Collection: {collection}")
-    if chunk_id:
-        parts.append(f"Chunk ID: {chunk_id}")
-    parts.append(text)
-    return "\n".join(parts)
+    return f"[{index}] {text}"
 
 
 def format_retrieved_docs(docs: list[Document]) -> list[str]:
