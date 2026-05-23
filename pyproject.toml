@@ -30,4 +30,4 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["trail_buddy*"]
+include = ["trail_buddy*", "evaluation*"]

@@ -34,6 +34,32 @@ uv run python app.py        # Gradio UI on http://127.0.0.1:7860
 uv run pytest               # smoke tests (use a fake LLM, no API key needed)
 ```
 
+## Evaluation
+
+Evaluation settings live in `evaluation/eval_config.toml`. Run the offline
+evaluation pipeline with:
+
+```bash
+uv run python -m evaluation.run
+uv run python -m evaluation.run --limit 5
+uv run python -m evaluation.run --include-ungraded
+uv run python -m evaluation.run --output evaluation/results/test.jsonl
+```
+
+The runner sends each English dataset query through the real Trail Buddy graph,
+then makes two structured judge calls: one for Truthfulness and one for
+Completeness. Results are written as JSONL plus a summary JSON file in
+`evaluation/results/`.
+
+Evaluation model selection is separate from the app `.env` model setting:
+`agent_model` controls the Trail Buddy agent being evaluated, and `judge_model`
+controls the judge. `TRAIL_BUDDY_MODEL` is for the app runtime. Provider API
+keys are still read from the environment or `.env` in the standard LiteLLM
+variables such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
+
+If the provider returns `429 Too Many Requests`, increase
+`request_delay_seconds` or `retry_backoff_seconds` in `evaluation/eval_config.toml`.
+
 ## Layout
 
 ```

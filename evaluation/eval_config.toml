@@ -1,0 +1,21 @@
+[evaluation]
+dataset_path = "/Users/Anna/Desktop/Pjcts/eval/evaluation_dataset.csv"
+output_dir = "evaluation/results"
+
+# Model used by the Trail Buddy agent during evaluation. This is intentionally
+# separate from TRAIL_BUDDY_MODEL in .env.
+# "anthropic/claude-sonnet-4-5"
+agent_model = "openai/gpt-4.1"
+
+# LLM used only for judging generated answers.
+judge_model = "mistral/mistral-small-latest"
+judge_temperature = 0
+
+# Slow down evaluation provider calls to avoid 429 rate limits. A graded case can
+# use three LLM calls: agent, Truthfulness judge, Completeness judge.
+request_delay_seconds = 3
+retry_attempts = 5
+retry_backoff_seconds = 20
+
+# Optional row limit for development runs.
+max_rows = 0

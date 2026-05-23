@@ -9,3 +9,5 @@ __pycache__/
 .DS_Store
 rag_store/
 logs/
+evaluation/results/*
+!evaluation/results/.gitkeep
