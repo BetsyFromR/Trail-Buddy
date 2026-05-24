@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 
 import gradio as gr
@@ -78,4 +77,4 @@ with gr.Blocks(title="Trail Buddy") as demo:
 
 
 if __name__ == "__main__":
-    demo.launch(server_name=os.getenv("GRADIO_HOST", "127.0.0.1"), quiet=True)
+    demo.launch(share=True)

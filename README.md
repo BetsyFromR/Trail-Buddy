@@ -42,7 +42,7 @@ Override the location or verbosity with `TRAIL_BUDDY_LOG_DIR` and
 ## Run
 
 ```bash
-uv run python app.py        # Gradio UI on http://127.0.0.1:7860
+uv run python app.py        # Gradio UI with a temporary public *.gradio.live URL
 uv run pytest               # smoke tests (use a fake LLM, no API key needed)
 ```
 
