@@ -75,6 +75,29 @@ def test_system_prompt_avoids_source_citations_in_answers():
     assert "source (url" not in lowered
 
 
+def test_system_prompt_uses_search_for_location_specific_route_recommendations():
+    rendered = render_system_prompt()
+    lowered = rendered.lower()
+    assert "local trail/route" in lowered
+    assert "specific" in lowered
+    assert "country" in lowered
+    assert "mountain range" in lowered
+    assert "must call `tavily_search` before recommending" in lowered
+    assert "where should i train in durmitor" in lowered
+    assert "do not answer from" in lowered
+    assert "route discovery" in lowered
+
+
+def test_system_prompt_requires_weather_tool_for_exact_date_conditions():
+    rendered = render_system_prompt()
+    lowered = rendered.lower()
+    normalized = " ".join(lowered.split())
+    assert "specific place and exact date" in normalized
+    assert "you must call `trail_weather_search`" in normalized
+    assert "a month or season alone" in normalized
+    assert "is not a planned date" in normalized
+
+
 def test_advisor_answers_without_source_links_when_retrieval_present():
     llm = FakeListChatModel(responses=["Use poles on steep climbs."])
     graph = build_graph(
