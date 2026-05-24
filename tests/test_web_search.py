@@ -1,3 +1,6 @@
+import json
+import logging
+
 import pytest
 from langchain_core.language_models.fake_chat_models import (
     FakeListChatModel,
@@ -9,6 +12,7 @@ from langchain_core.tools import tool
 from trail_buddy.graph import build_graph
 from trail_buddy.web_search import build_web_search_tools
 from trail_buddy.web_search.config import WebSearchSettings, get_web_search_settings
+from trail_buddy.web_search.tools import _make_tavily_tool
 
 
 def test_web_search_settings_resolve_from_env(monkeypatch):
@@ -37,6 +41,33 @@ def test_web_search_tool_built_when_api_key_present(monkeypatch):
     assert len(tools) == 1
     assert tools[0].name == "tavily_search"
     assert "trail-running" in tools[0].description
+
+
+def test_web_search_tool_logs_answer_and_result_summaries(caplog):
+    class StubTavily:
+        def invoke(self, payload):
+            assert payload == {"query": "best trail running routes Montenegro"}
+            return {
+                "answer": "Try Ladder of Kotor for a steep scenic route.",
+                "results": [
+                    {
+                        "title": "Ladder of Kotor",
+                        "url": "https://example.test/kotor",
+                        "content": "Historic switchbacks above Kotor Bay.",
+                    }
+                ],
+            }
+
+    caplog.set_level(logging.INFO, logger="trail_buddy.web_search.tools")
+
+    search = _make_tavily_tool(StubTavily())
+    raw = search.invoke({"query": "best trail running routes Montenegro"})
+
+    assert json.loads(raw)["answer"] == "Try Ladder of Kotor for a steep scenic route."
+    assert "[web_search] tavily answer" in caplog.text
+    assert "Try Ladder of Kotor" in caplog.text
+    assert "title=Ladder of Kotor" in caplog.text
+    assert "https://example.test/kotor" in caplog.text
 
 
 def test_graph_builds_without_tavily_key(monkeypatch):
@@ -78,3 +109,41 @@ def test_graph_routes_web_search_tool_call():
     contents = [getattr(m, "content", "") for m in result["messages"]]
     assert any("WEB results for: UTMB 2026 registration" in str(c) for c in contents)
     assert result["messages"][-1].content == "Registration opens in December."
+
+
+def test_graph_routes_location_specific_route_search_tool_call():
+    @tool("tavily_search")
+    def stub_tavily(query: str) -> str:
+        """Stub."""
+        return f"WEB route results for: {query}"
+
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "tavily_search",
+                "args": {
+                    "query": (
+                        "best trail running routes Montenegro Durmitor Lovcen "
+                        "Vrmac Prokletije"
+                    )
+                },
+                "id": "call_montenegro_routes",
+            }
+        ],
+    )
+    final_msg = AIMessage(content="For Montenegro, start with Durmitor or Vrmac.")
+
+    llm = FakeMessagesListChatModel(responses=[tool_call_msg, final_msg])
+    graph = build_graph(llm=llm, retriever=lambda q: [], tools=[stub_tavily])
+    result = graph.invoke(
+        {"messages": [HumanMessage(content="Which Montenegro trail do you advise to run?")]},
+        config={"configurable": {"thread_id": "montenegro-route-search"}},
+    )
+
+    contents = [getattr(m, "content", "") for m in result["messages"]]
+    assert any(
+        "WEB route results for: best trail running routes Montenegro" in str(c)
+        for c in contents
+    )
+    assert result["messages"][-1].content == "For Montenegro, start with Durmitor or Vrmac."

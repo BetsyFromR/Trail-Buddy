@@ -1,3 +1,5 @@
+import logging
+
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -9,6 +11,9 @@ from trail_buddy.nodes import make_advisor_node, make_retrieve_node
 from trail_buddy.state import State
 from trail_buddy.weather import WEATHER_TOOLS
 from trail_buddy.web_search import build_web_search_tools
+
+
+logger = logging.getLogger(__name__)
 
 
 def build_graph(
@@ -30,6 +35,10 @@ def build_graph(
         [*WEATHER_TOOLS, *EFFORT_TOOLS, *build_web_search_tools()]
         if tools is None
         else tools
+    )
+    logger.info(
+        "[tools] enabled: %s",
+        ", ".join(tool.name for tool in resolved_tools) or "none",
     )
 
     graph = StateGraph(State)

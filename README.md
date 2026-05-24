@@ -1,10 +1,16 @@
 # Trail Buddy
 
-Conversational trail-running assistant. LangGraph + LiteLLM + Gradio. Final project for "Intro to AI Agents".
+Conversational trail-running assistant. LangGraph + LiteLLM + Gradio, with local RAG and optional tool use. Final project for "Intro to AI Agents".
 
 ## What it does
 
-Answers questions about race readiness, gear, training, recovery, health concerns, and race-day logistics. Multilingual (EN / RU / SR). Asks one clarifying question when the answer materially depends on missing facts (race name, fitness baseline, etc.).
+Answers questions about race readiness, gear, training, recovery, health concerns, weather, current race information, and race-day logistics. Multilingual (EN / RU / SR). Asks one clarifying question when the answer materially depends on missing facts (race name, fitness baseline, date, location, etc.).
+
+The graph always tries local RAG first when a user message is present. The advisor can then call tools for:
+
+- weather and historical climatology via Open-Meteo;
+- rough flat-kilometer effort estimates from distance and elevation gain;
+- optional public-web search via Tavily when `TAVILY_API_KEY` is set.
 
 ## Setup
 
@@ -23,6 +29,12 @@ still override the file when needed.
 Set `use_bm25 = true` to fuse BM25 matches over the stored Chroma documents
 with vector matches using Reciprocal Rank Fusion.
 
+The weather tool uses Open-Meteo and does not need an API key. Optional weather
+settings are in `.env.example` under `TRAIL_BUDDY_WEATHER_*`.
+
+The public-web search tool is enabled only when `TAVILY_API_KEY` is set. Without
+that key, Trail Buddy starts normally and runs without web search.
+
 Logs are written to `logs/trail_buddy.log` and `logs/trail_buddy.error.log`.
 Override the location or verbosity with `TRAIL_BUDDY_LOG_DIR` and
 `TRAIL_BUDDY_LOG_LEVEL`.
@@ -30,7 +42,7 @@ Override the location or verbosity with `TRAIL_BUDDY_LOG_DIR` and
 ## Run
 
 ```bash
-uv run python app.py        # Gradio UI on http://127.0.0.1:7860
+uv run python app.py        # Gradio UI with a temporary public *.gradio.live URL
 uv run pytest               # smoke tests (use a fake LLM, no API key needed)
 ```
 
@@ -68,8 +80,12 @@ trail_buddy/
   prompts.py      System prompt — clarification policy, language rule, health caveats
   llm.py          ChatLiteLLM factory (provider chosen via env)
   nodes.py        retrieve_node (local RAG lookup) + advisor_node
-  graph.py        build_graph() — START → retrieve → advisor → END, with MemorySaver
+  graph.py        build_graph() — START → retrieve → advisor, optional tools loop, MemorySaver
   retrieval/      RAG path/config seam for external docs and indexes
+  effort/         flat-kilometer effort estimation tool
+  weather/        Open-Meteo geocoding, forecast, and historical climatology tool
+  web_search/     optional Tavily-backed public-web search tool
+evaluation/       offline evaluation runner, prompts, dataset loading, result models
 app.py            Gradio ChatInterface
 tests/            pytest smoke tests
 ```
@@ -79,6 +95,8 @@ tests/            pytest smoke tests
 `trail_buddy/retrieval/` reads RAG settings from `rag_config.toml`, then reads a
 user-provided Chroma store from the configured `store_dir`. If retrieval is
 unavailable, the graph logs the failure and answers without retrieved context.
+Retrieval is currently attempted for every non-empty user message; there is no
+classifier that skips chit-chat or pure-opinion questions yet.
 
 Current assumptions:
 
@@ -86,4 +104,3 @@ Current assumptions:
   collection before switching to `BAAI/bge-m3`.
 - Vector store: Chroma (file-backed, zero-ops).
 - Sources: race databases (UTMB / ITRA), gear catalogues, sports-medicine references.
-- Skip retrieval for chit-chat and pure-opinion questions.
